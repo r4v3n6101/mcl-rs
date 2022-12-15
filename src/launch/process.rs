@@ -1,21 +1,19 @@
-use std::env::JoinPathsError;
-use std::fmt::Debug;
 use std::{
     borrow::Cow,
     collections::HashMap,
-    env,
+    env::{self, JoinPathsError},
     ffi::{OsStr, OsString},
+    fmt::Debug,
     iter,
     path::Path,
     process::Command,
 };
 
-use tracing::{instrument, trace};
+use tracing::{error, instrument, trace};
 
 use crate::{io::file::Hierarchy, metadata::game::VersionInfo};
 
-#[instrument(level = "trace")]
-fn substitute_arg<'a>(arg: &'a str, params: &'a HashMap<&str, Cow<'a, OsStr>>) -> OsString {
+fn substitute_arg(arg: &str, params: &HashMap<&str, Cow<'_, OsStr>>) -> OsString {
     if let Some(i) = arg.find("${") {
         if let Some(j) = arg[i..].find('}') {
             if let Some(replacement) = params.get(&arg[i + 2..i + j]) {
@@ -60,11 +58,11 @@ impl<'a> GameCommand<'a> {
     }
 
     #[instrument(level = "trace")]
-    pub fn from_version_info<'b: 'a>(
+    pub fn from_version_info(
         hierarchy: &'a Hierarchy,
         version: &'a VersionInfo,
-        features: &'b HashMap<&str, bool>,
-        username: &'a str,
+        features: &HashMap<&str, bool>,
+        username: &str,
     ) -> Self {
         const LAUNCHER_NAME: &str = env!("CARGO_PKG_NAME");
         const LAUNCHER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -92,7 +90,7 @@ impl<'a> GameCommand<'a> {
                 params.insert("classpath", Cow::Owned(classpath));
             }
             Err(e) => {
-                trace!(%e, "Error appending classpath to params");
+                error!(%e, "Error appending classpath to params");
             }
         }
 

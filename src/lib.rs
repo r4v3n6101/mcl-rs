@@ -1,9 +1,11 @@
 use std::result;
 
-pub mod io;
+pub mod auth;
+pub mod tasks;
+
+pub mod files;
+pub mod launch;
 pub mod metadata;
-pub mod process;
-pub mod resources;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {

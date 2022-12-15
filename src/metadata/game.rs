@@ -2,7 +2,7 @@ use std::{collections::HashMap, env::consts, iter};
 
 use chrono::{DateTime, Utc};
 use serde_derive::Deserialize;
-use serde_with::{serde_as, OneOrMany, SpaceSeparator, StringWithSeparator};
+use serde_with::{formats::SpaceSeparator, serde_as, OneOrMany, StringWithSeparator};
 use url::Url;
 
 use super::manifest::ReleaseType;
@@ -178,7 +178,7 @@ impl Rule {
                     return self.action.invert();
                 }
             }
-            if let Some(version) = &os.version {
+            if let Some(_version) = &os.version {
                 // TODO: version parsing using crate
             }
         }

@@ -33,19 +33,3 @@ pub struct VersionsManifest {
     pub latest: Latest,
     pub versions: Vec<Version>,
 }
-
-impl VersionsManifest {
-    pub fn get_version(&self, id: &str) -> Option<&Version> {
-        self.versions
-            .iter()
-            .find(|version| version.id.eq_ignore_ascii_case(id))
-    }
-
-    pub fn latest_release(&self) -> Option<&Version> {
-        self.get_version(&self.latest.release)
-    }
-
-    pub fn latest_snapshot(&self) -> Option<&Version> {
-        self.get_version(&self.latest.snapshot)
-    }
-}
