@@ -25,14 +25,14 @@ pub trait Source {
     where
         Self: 'a;
 
-    fn indices(&self) -> Self::IntoIter<'_>;
+    fn remote_indices(&self) -> Self::IntoIter<'_>;
 }
 
 impl Source for VersionsManifest {
     // impl traits not allowed here for now
     type IntoIter<'a> = Box<dyn Iterator<Item = Index<'a>> + 'a>;
 
-    fn indices(&self) -> Self::IntoIter<'_> {
+    fn remote_indices(&self) -> Self::IntoIter<'_> {
         Box::new(self.versions.iter().map(|version| Index {
             r#type: Type::VersionInfo,
             url: version.url.clone(),
@@ -47,7 +47,7 @@ impl Source for AssetIndex {
     // impl traits not allowed here for now
     type IntoIter<'a> = Box<dyn Iterator<Item = Index<'a>> + 'a>;
 
-    fn indices(&self) -> Self::IntoIter<'_> {
+    fn remote_indices(&self) -> Self::IntoIter<'_> {
         Box::new(
             self.objects
                 .iter()
@@ -57,8 +57,8 @@ impl Source for AssetIndex {
                         .origin
                         .join(&format!("{}/{}", &hash[..2], &hash))
                         .expect("invalid url-encoded hash"),
-                    name: &path,
-                    hash: Some(&hash),
+                    name: path,
+                    hash: Some(hash),
                     size: Some(*size),
                 }),
         )
@@ -69,7 +69,7 @@ impl Source for VersionInfo {
     // impl traits not allowed here for now
     type IntoIter<'a> = Box<dyn Iterator<Item = Index<'a>> + 'a>;
 
-    fn indices(&self) -> Self::IntoIter<'_> {
+    fn remote_indices(&self) -> Self::IntoIter<'_> {
         let asset_index = iter::once(Index {
             r#type: Type::AssetIndex,
             url: self.asset_index.resource.url.clone(),

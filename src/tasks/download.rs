@@ -8,7 +8,6 @@ use std::{
     },
 };
 
-use derivative::Derivative;
 use reqwest::IntoUrl;
 use tokio::{
     fs::{create_dir_all, File},
@@ -19,15 +18,12 @@ use url::Url;
 
 use super::{display::Progress, Handle, Task};
 
-#[derive(Derivative)]
-#[derivative(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug)]
 pub struct JobMetadata {
     url: Url,
     path: Box<Path>,
 
-    #[derivative(PartialEq = "ignore", Hash = "ignore")]
     downloaded_bytes: AtomicU64,
-    #[derivative(PartialEq = "ignore", Hash = "ignore")]
     content_size: AtomicU64,
 }
 
@@ -77,7 +73,7 @@ pub fn task(handle: Arc<Handle<JobMetadata, ()>>) -> Task<()> {
         let mut output = BufWriter::with_capacity(BUF_SIZE, file);
         let mut response = reqwest::get(metadata.url.clone()).await?;
 
-        handle.metadata().content_size.store(
+        metadata.content_size.store(
             response.content_length().unwrap_or_default(),
             Ordering::Relaxed,
         );

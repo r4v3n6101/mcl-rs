@@ -2,7 +2,6 @@ use std::{
     error::Error,
     fmt::{self, Debug},
     future::Future,
-    mem,
     ops::{Deref, DerefMut},
     pin::Pin,
     sync::{Arc, RwLock},
@@ -15,6 +14,7 @@ pub mod download;
 
 type StdError = Box<dyn Error + Send + Sync + 'static>;
 type Task<R> = Pin<Box<dyn Future<Output = Result<R, StdError>> + Send + Sync + 'static>>;
+type TaskGenerator<M, R> = fn(Arc<Handle<M, R>>) -> Task<R>;
 
 #[derive(Debug)]
 pub struct Cancelled;
@@ -28,8 +28,8 @@ impl fmt::Display for Cancelled {
 impl Error for Cancelled {}
 
 #[derive(Debug)]
-pub enum State<M, R> {
-    Pending(fn(Arc<Handle<M, R>>) -> Task<R>),
+pub enum State<R> {
+    Pending,
     Starting,
 
     Running,
@@ -43,7 +43,7 @@ pub enum State<M, R> {
 
 #[derive(Debug)]
 pub struct Handle<M, R> {
-    state: RwLock<State<M, R>>,
+    state: RwLock<State<R>>,
     metadata: M,
 }
 
@@ -52,7 +52,7 @@ impl<M, R> Handle<M, R> {
         &self.metadata
     }
 
-    pub fn state(&self) -> impl Deref<Target = State<M, R>> + '_ {
+    pub fn state(&self) -> impl Deref<Target = State<R>> + '_ {
         self.state.read().unwrap()
     }
 
@@ -96,8 +96,10 @@ impl<M, R> Drop for Handle<M, R> {
     }
 }
 
+#[derive(Default)]
 pub struct Manager<M, R = ()> {
     handles: Vec<Arc<Handle<M, R>>>,
+    tasks: Vec<TaskGenerator<M, R>>,
     semaphore: Option<Arc<Semaphore>>,
 }
 
@@ -106,27 +108,35 @@ where
     M: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
-    pub fn tasks(&self) -> impl Iterator<Item = Arc<Handle<M, R>>> + '_ {
-        self.handles.iter().map(|r| Arc::clone(&r))
+    pub fn with_concurrency_limit(limit: u32) -> Self {
+        Self {
+            handles: Default::default(),
+            tasks: Default::default(),
+            semaphore: Some(Arc::new(Semaphore::new(limit as usize))),
+        }
     }
 
-    pub fn new_task(&mut self, metadata: M, task: fn(Arc<Handle<M, R>>) -> Task<R>) {
+    pub fn tasks(&self) -> impl Iterator<Item = Arc<Handle<M, R>>> + '_ {
+        self.handles.iter().map(Arc::clone)
+    }
+
+    pub fn new_task(&mut self, metadata: M, task: TaskGenerator<M, R>) {
         self.handles.push(Arc::new(Handle {
             metadata,
-            state: RwLock::new(State::Pending(task)),
+            state: RwLock::new(State::Pending),
         }));
+        self.tasks.push(task);
     }
 
-    fn run(&self, handle: &Arc<Handle<M, R>>) -> Option<JoinHandle<()>> {
+    fn run(&self, idx: usize) -> Option<JoinHandle<()>> {
+        let handle = &self.handles[idx];
+        let task = self.tasks[idx];
+
         let mut lock = handle.state.write().unwrap();
         let state = lock.deref_mut();
-        if let State::Pending(_) = state {
-            let State::Pending(task) = mem::replace(state, State::Starting) else {
-                unreachable!()
-            };
-
-            let this = Arc::clone(&handle);
-            let semaphore = self.semaphore.as_ref().map(|s| Arc::clone(&s));
+        if let State::Pending = state {
+            let this = Arc::clone(handle);
+            let semaphore = self.semaphore.as_ref().map(Arc::clone);
             let handle = tokio::spawn(async move {
                 let _permit = match semaphore {
                     Some(semaphore) => {
@@ -160,8 +170,8 @@ where
 
     pub async fn run_all(&self) {
         let mut join_handles = Vec::with_capacity(self.handles.len());
-        for handle in &self.handles {
-            if let Some(join_handle) = self.run(handle) {
+        for idx in 0..self.tasks.len() {
+            if let Some(join_handle) = self.run(idx) {
                 join_handles.push(join_handle);
             }
         }
