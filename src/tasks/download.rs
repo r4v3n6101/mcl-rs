@@ -1,11 +1,7 @@
 use std::{
     fmt::{self, Display},
-    num::NonZeroU64,
+    io,
     path::Path,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
 };
 
 use reqwest::IntoUrl;
@@ -13,44 +9,43 @@ use tokio::{
     fs::{create_dir_all, File},
     io::{AsyncWriteExt, BufWriter},
 };
-use tracing::{debug, trace};
+use tracing::{debug, instrument, trace};
 use url::Url;
 
-use super::{display::Progress, Handle, Task};
+use super::{FutureTask, Handle, Value};
 
 #[derive(Debug)]
-pub struct JobMetadata {
+pub struct DownloadMetadata {
     url: Url,
     path: Box<Path>,
 
-    downloaded_bytes: AtomicU64,
-    content_size: AtomicU64,
+    downloaded_bytes: u64,
+    content_size: Option<u64>,
 }
 
-impl Display for JobMetadata {
+impl Display for DownloadMetadata {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} -> {}", self.url, self.path.display())
     }
 }
 
-impl Progress for JobMetadata {
-    type Output = u64;
+impl DownloadMetadata {
+    pub fn current_progress(&self) -> Option<u64> {
+        Some(self.downloaded_bytes)
+    }
 
-    fn progress(&self) -> (Self::Output, Option<Self::Output>) {
-        (
-            self.downloaded_bytes.load(Ordering::Relaxed),
-            NonZeroU64::new(self.content_size.load(Ordering::Relaxed)).map(NonZeroU64::get),
-        )
+    pub fn max_progress(&self) -> Option<u64> {
+        self.content_size
     }
 }
 
-impl JobMetadata {
+impl DownloadMetadata {
     pub fn new<U, P>(url: U, path: P) -> Self
     where
         U: IntoUrl,
         P: Into<Box<Path>>,
     {
-        JobMetadata {
+        DownloadMetadata {
             url: url.into_url().unwrap(),
             path: path.into(),
             downloaded_bytes: Default::default(),
@@ -59,37 +54,56 @@ impl JobMetadata {
     }
 }
 
-pub fn task(handle: Arc<Handle<JobMetadata, ()>>) -> Task<()> {
+#[instrument]
+pub async fn download_file(handle: Handle) -> io::Result<()> {
     const BUF_SIZE: usize = 1024 * 16; //  16kb
 
-    // TODO : span an instrument
-    Box::pin(async move {
-        let metadata = handle.metadata();
-
+    let (mut output, mut response) = {
+        let metadata = handle.metadata::<DownloadMetadata>();
         if let Some(parent) = metadata.path.parent() {
             create_dir_all(parent).await?;
         }
         let file = File::create(&metadata.path).await?;
-        let mut output = BufWriter::with_capacity(BUF_SIZE, file);
-        let mut response = reqwest::get(metadata.url.clone()).await?;
+        (
+            BufWriter::with_capacity(BUF_SIZE, file),
+            reqwest::get(metadata.url.clone())
+                .await
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?,
+        )
+    };
+    debug!(?response, "Remote responded");
 
-        metadata.content_size.store(
-            response.content_length().unwrap_or_default(),
-            Ordering::Relaxed,
-        );
+    handle.metadata_mut::<DownloadMetadata>().content_size = response.content_length();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+    {
+        let len = chunk.len();
+        output.write_all(&chunk).await?;
+        trace!(len, "New chunk written");
 
-        debug!(?response, "Remote responded");
-        while let Some(chunk) = response.chunk().await? {
-            let len = chunk.len();
-            trace!(len, "New chunk arrived");
-            output.write_all(&chunk).await?;
+        handle.metadata_mut::<DownloadMetadata>().downloaded_bytes += len as u64;
+    }
+    output.flush().await?;
 
-            metadata
-                .downloaded_bytes
-                .fetch_add(len as u64, Ordering::Relaxed);
-        }
-        output.flush().await?;
+    Ok(())
+}
 
-        Ok(())
+/*
+#[instrument]
+pub async fn download_and_deserialize_file<T: DeserializeOwned>(
+    metadata: &DownloadMetadata,
+) -> io::Result<T> {
+    download_file(metadata).await?;
+    let buf = fs::read(&metadata.path).await?;
+    Ok(serde_json::from_slice(&buf)?)
+}*/
+
+pub fn download_file_task(handle: Handle) -> FutureTask {
+    Box::pin(async move {
+        download_file(handle).await?;
+
+        Ok(Box::new(()) as Value)
     })
 }
