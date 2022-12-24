@@ -14,6 +14,7 @@ use tokio::{
 };
 
 pub mod download;
+pub mod validate;
 
 pub type StdError = Box<dyn Error + Send + Sync + 'static>;
 pub type Value = Box<dyn Any + Send + Sync>;

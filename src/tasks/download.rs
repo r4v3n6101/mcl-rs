@@ -58,22 +58,27 @@ impl DownloadMetadata {
 pub async fn download_file(handle: Handle) -> io::Result<()> {
     const BUF_SIZE: usize = 1024 * 16; //  16kb
 
-    let (mut output, mut response) = {
-        let metadata = handle.metadata::<DownloadMetadata>();
-        if let Some(parent) = metadata.path.parent() {
+    let mut response = {
+        let response = reqwest::get(handle.metadata::<DownloadMetadata>().url.clone())
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        debug!(?response, "Remote responded");
+        handle.metadata_mut::<DownloadMetadata>().content_size = response.content_length();
+
+        response
+    };
+
+    let mut output = {
+        let path = &handle.metadata::<DownloadMetadata>().path;
+        if let Some(parent) = path.parent() {
             create_dir_all(parent).await?;
         }
-        let file = File::create(&metadata.path).await?;
-        (
-            BufWriter::with_capacity(BUF_SIZE, file),
-            reqwest::get(metadata.url.clone())
-                .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?,
-        )
-    };
-    debug!(?response, "Remote responded");
+        let file = File::create(path).await?;
+        debug!(?file, "File created");
 
-    handle.metadata_mut::<DownloadMetadata>().content_size = response.content_length();
+        BufWriter::with_capacity(BUF_SIZE, file)
+    };
+
     while let Some(chunk) = response
         .chunk()
         .await
@@ -89,16 +94,6 @@ pub async fn download_file(handle: Handle) -> io::Result<()> {
 
     Ok(())
 }
-
-/*
-#[instrument]
-pub async fn download_and_deserialize_file<T: DeserializeOwned>(
-    metadata: &DownloadMetadata,
-) -> io::Result<T> {
-    download_file(metadata).await?;
-    let buf = fs::read(&metadata.path).await?;
-    Ok(serde_json::from_slice(&buf)?)
-}*/
 
 pub fn download_file_task(handle: Handle) -> FutureTask {
     Box::pin(async move {
