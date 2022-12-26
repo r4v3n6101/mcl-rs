@@ -1,5 +1,5 @@
-use chrono::{DateTime, Utc};
 use serde_derive::Deserialize;
+use time::PrimitiveDateTime;
 use url::Url;
 
 #[derive(Deserialize, Debug)]
@@ -18,8 +18,8 @@ pub struct Version {
     #[serde(rename = "type")]
     pub release_type: ReleaseType,
     pub url: Url,
-    pub time: DateTime<Utc>,
-    pub release_time: DateTime<Utc>,
+    pub time: PrimitiveDateTime,
+    pub release_time: PrimitiveDateTime,
 }
 
 #[derive(Deserialize, Debug)]

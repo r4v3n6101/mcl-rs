@@ -5,19 +5,18 @@ edition = "2021"
 rust-version = "1.60.0"
 
 [dependencies]
+tracing = "0.1"
+
 serde = "1"
 serde_derive = "1"
 serde_with = "2.1"
 
 url = { version = "2.3", features = ["serde"] }
-chrono = { version = "0.4", features = ["serde"] }
+time = { version = "0.3", features = ["serde"] }
 serde_json = "1"
 
 tokio = { version = "1", features = ["fs", "sync"] }
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = "0.11"
 
-zip = "0.6.2"
+zip = "0.6"
 dirs = "4"
-
-tracing = "0.1"
-thiserror = "1.0"

@@ -4,12 +4,14 @@ use serde_derive::Deserialize;
 
 use url::Url;
 
+use crate::resources::DEFAULT_RESOURCES_URL;
+
 fn empty_hash() -> String {
     String::from("00null")
 }
 
 fn default_base_url() -> Url {
-    Url::from_str("http://resources.download.minecraft.net").expect("invalid default resources url")
+    Url::from_str(DEFAULT_RESOURCES_URL).unwrap()
 }
 
 #[derive(Deserialize, Debug, Clone)]

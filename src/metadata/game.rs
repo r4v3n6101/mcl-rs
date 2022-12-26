@@ -1,8 +1,8 @@
 use std::{collections::HashMap, env::consts, iter};
 
-use chrono::{DateTime, Utc};
 use serde_derive::Deserialize;
 use serde_with::{formats::SpaceSeparator, serde_as, OneOrMany, StringWithSeparator};
+use time::PrimitiveDateTime;
 use url::Url;
 
 use super::manifest::ReleaseType;
@@ -134,8 +134,8 @@ pub struct VersionInfo {
     #[serde(rename = "type")]
     pub release_type: ReleaseType,
     pub minimum_launcher_version: usize,
-    pub release_time: DateTime<Utc>,
-    pub time: DateTime<Utc>,
+    pub release_time: PrimitiveDateTime,
+    pub time: PrimitiveDateTime,
     pub libraries: Vec<Library>,
     pub downloads: Downloads,
     pub asset_index: AssetIndexResource,
