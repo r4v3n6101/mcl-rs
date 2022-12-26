@@ -76,18 +76,18 @@ impl DownloadItem {
             self.count.fetch_add(len as u64, Ordering::Relaxed);
         }
 
-        async {
-            if let Some(path) = self.path.as_ref() {
+        if let Some(path) = self.path.as_ref() {
+            async {
                 if let Some(parent) = path.parent() {
                     create_dir_all(parent).await?;
                 }
                 fs::write(path, &buf).await?;
-            }
 
-            io::Result::Ok(())
+                io::Result::Ok(())
+            }
+            .instrument(info_span!("write_to_file"))
+            .await?;
         }
-        .instrument(info_span!("write_file"))
-        .await?;
 
         Ok(buf)
     }
@@ -96,7 +96,7 @@ impl DownloadItem {
     pub async fn download_json<T: DeserializeOwned>(&self, client: &Client) -> io::Result<T> {
         let buf = self.download(client).await?;
 
-        info_span!("zip_extract").in_scope(|| {
+        info_span!("deserialize_json").in_scope(|| {
             serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
         })
     }
