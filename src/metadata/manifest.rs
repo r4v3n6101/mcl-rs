@@ -1,5 +1,5 @@
 use serde_derive::Deserialize;
-use time::PrimitiveDateTime;
+use time::OffsetDateTime;
 use url::Url;
 
 #[derive(Deserialize, Debug)]
@@ -18,8 +18,8 @@ pub struct Version {
     #[serde(rename = "type")]
     pub release_type: ReleaseType,
     pub url: Url,
-    pub time: PrimitiveDateTime,
-    pub release_time: PrimitiveDateTime,
+    pub time: OffsetDateTime,
+    pub release_time: OffsetDateTime,
 }
 
 #[derive(Deserialize, Debug)]
