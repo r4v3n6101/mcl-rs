@@ -8,7 +8,7 @@ use std::{
 use reqwest::Client;
 use serde::de::DeserializeOwned;
 use tokio::fs::{self, create_dir_all};
-use tracing::{debug, info_span, instrument, trace, Instrument};
+use tracing::{info_span, instrument, trace, Instrument};
 use url::Url;
 
 use super::{Dirs, Source};
@@ -49,9 +49,9 @@ impl DownloadItem {
         let mut response = client
             .get(self.url.clone())
             .send()
+            .instrument(info_span!("wait_for_response"))
             .await
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        debug!(?response, "got response");
 
         match (self.size, response.content_length()) {
             (Some(source_len), Some(content_len)) if source_len != content_len => {
@@ -63,18 +63,25 @@ impl DownloadItem {
             _ => (),
         }
 
-        let buf_size = self.size.or(response.content_length()).unwrap_or_default();
-        let mut buf = Vec::with_capacity(buf_size as usize);
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
-        {
-            let len = chunk.len();
-            trace!(len, "new chunk arrived");
-            buf.extend_from_slice(chunk.as_ref());
-            self.count.fetch_add(len as u64, Ordering::Relaxed);
+        let buf = async {
+            let buf_size = self.size.or(response.content_length()).unwrap_or_default();
+            let mut buf = Vec::with_capacity(buf_size as usize);
+            trace!(buf_size, "allocated buf");
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+            {
+                let len = chunk.len();
+                trace!(len, "new chunk arrived");
+                buf.extend_from_slice(chunk.as_ref());
+                self.count.fetch_add(len as u64, Ordering::Relaxed);
+            }
+
+            io::Result::Ok(buf)
         }
+        .instrument(info_span!("fetch_data"))
+        .await?;
 
         if let Some(path) = self.path.as_ref() {
             async {
