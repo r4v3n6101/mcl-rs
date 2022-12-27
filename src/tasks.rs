@@ -5,14 +5,11 @@ use std::{
     future::Future,
     ops::{Deref, DerefMut},
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, Mutex, RwLock},
     task::{Context, Poll, Waker},
 };
 
-use tokio::{
-    sync::{Mutex, RwLock, Semaphore},
-    task::JoinSet,
-};
+use tokio::{sync::Semaphore, task::JoinSet};
 use tracing::{info, instrument, trace, warn, Instrument};
 
 pub type StdError = Box<dyn Error + Send + Sync + 'static>;
@@ -47,11 +44,15 @@ pub struct Handle {
 
 impl Handle {
     fn state_mut(&self) -> impl DerefMut<Target = State> + '_ {
-        self.inner.state.blocking_write()
+        self.inner.state.write().unwrap()
+    }
+
+    fn waker(&self) -> impl DerefMut<Target = Option<Waker>> + '_ {
+        self.inner.waker.lock().unwrap()
     }
 
     pub fn state(&self) -> impl Deref<Target = State> + '_ {
-        self.inner.state.blocking_read()
+        self.inner.state.read().unwrap()
     }
 
     pub fn metadata<T: Any>(&self) -> impl Deref<Target = T> + '_ {
@@ -65,7 +66,7 @@ impl Handle {
         let state = &mut *self.state_mut();
         if matches!(state, State::Running) {
             *state = State::Paused;
-            if let Some(waker) = self.inner.waker.blocking_lock().take() {
+            if let Some(waker) = self.waker().take() {
                 trace!(?self, "waking up for pause");
                 waker.wake();
             }
@@ -76,7 +77,7 @@ impl Handle {
         let state = &mut *self.state_mut();
         if matches!(state, State::Paused) {
             *state = State::Running;
-            if let Some(waker) = self.inner.waker.blocking_lock().take() {
+            if let Some(waker) = self.waker().take() {
                 trace!(?self, "waking up for resume");
                 waker.wake();
             }
@@ -87,7 +88,7 @@ impl Handle {
         let state = &mut *self.state_mut();
         if matches!(state, State::Running | State::Paused) {
             *state = State::Cancelled;
-            if let Some(waker) = self.inner.waker.blocking_lock().take() {
+            if let Some(waker) = self.waker().take() {
                 trace!(?self, "waking up for cancel");
                 waker.wake();
             }
@@ -126,9 +127,7 @@ impl Future for Task {
                         }
                         Poll::Pending => {
                             this.handle
-                                .inner
-                                .waker
-                                .blocking_lock()
+                                .waker()
                                 .replace(cx.waker().clone());
                         }
                     }
@@ -137,9 +136,7 @@ impl Future for Task {
                 State::Paused => {
                     trace!(?this.handle, "poll paused");
                     this.handle
-                        .inner
-                        .waker
-                        .blocking_lock()
+                        .waker()
                         .replace(cx.waker().clone());
                     return Poll::Pending;
                 }
