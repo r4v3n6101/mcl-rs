@@ -126,18 +126,14 @@ impl Future for Task {
                             continue;
                         }
                         Poll::Pending => {
-                            this.handle
-                                .waker()
-                                .replace(cx.waker().clone());
+                            this.handle.waker().replace(cx.waker().clone());
                         }
                     }
                     return Poll::Pending;
                 }
                 State::Paused => {
                     trace!(?this.handle, "poll paused");
-                    this.handle
-                        .waker()
-                        .replace(cx.waker().clone());
+                    this.handle.waker().replace(cx.waker().clone());
                     return Poll::Pending;
                 }
                 State::Cancelled => {
@@ -172,7 +168,7 @@ impl Manager {
     }
 
     #[instrument]
-    pub fn new_task<T: Any + Debug + Send + Sync>(
+    pub fn execute_task<T: Any + Debug + Send + Sync>(
         &mut self,
         metadata: T,
         taskgen: fn(Handle) -> FutureTask,
