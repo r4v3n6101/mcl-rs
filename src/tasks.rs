@@ -1,11 +1,8 @@
 use std::{
-    any::Any,
-    error::Error,
     fmt::{self, Debug},
     future::{Future, IntoFuture},
     ops::{Deref, DerefMut},
     pin::Pin,
-    result,
     sync::{Arc, Mutex, RwLock},
     task::{Context, Poll, Waker},
 };
@@ -13,51 +10,72 @@ use std::{
 use tokio::{sync::Semaphore, task::JoinSet};
 use tracing::{info, info_span, instrument, trace, warn, Instrument};
 
-pub type StdError = Box<dyn Error + Send + Sync + 'static>;
-pub type Value = Box<dyn Any + Send + Sync>;
-pub type Result = result::Result<Value, StdError>;
-
-#[derive(Debug, Default)]
-pub enum State {
-    #[default]
+pub enum State<V, E> {
     Pending,
     Running,
     Paused,
     Cancelled,
 
-    Finished(Value),
-    Failed(StdError),
+    Finished(V),
+    Failed(E),
 }
 
-struct Inner {
-    metadata: Box<dyn Any + Send + Sync>,
-    state: RwLock<State>,
+impl<V, E> Debug for State<V, E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match &self {
+            State::Pending => "Pending",
+            State::Running => "Running",
+            State::Paused => "Paused",
+            State::Cancelled => "Cancelled",
+            State::Finished(_) => "Finished",
+            State::Failed(_) => "Failed",
+        })
+    }
+}
+
+struct Inner<M, V, E> {
+    metadata: M,
+    state: RwLock<State<V, E>>,
     waker: Mutex<Option<Waker>>,
 }
 
-#[derive(Clone)]
-pub struct Handle {
-    inner: Arc<Inner>,
+pub struct Handle<M, V, E> {
+    inner: Arc<Inner<M, V, E>>,
 }
 
-impl Handle {
-    fn state_mut(&self) -> impl DerefMut<Target = State> + '_ {
-        self.inner.state.write().unwrap()
+impl<M, V, E> Clone for Handle<M, V, E> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
     }
+}
 
+impl<M: Debug, V, E> Debug for Handle<M, V, E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Handle")
+            .field("metadata", &self.inner.metadata)
+            // TODO : may deadlock
+            .field("state", self.state().deref())
+            .finish()
+    }
+}
+
+impl<M, V, E> Handle<M, V, E> {
     fn waker(&self) -> impl DerefMut<Target = Option<Waker>> + '_ {
         self.inner.waker.lock().unwrap()
     }
 
-    pub fn state(&self) -> impl Deref<Target = State> + '_ {
+    fn state_mut(&self) -> impl DerefMut<Target = State<V, E>> + '_ {
+        self.inner.state.write().unwrap()
+    }
+
+    pub fn state(&self) -> impl Deref<Target = State<V, E>> + '_ {
         self.inner.state.read().unwrap()
     }
 
-    pub fn metadata<T: Any>(&self) -> impl Deref<Target = T> + '_ {
-        self.inner
-            .metadata
-            .downcast_ref()
-            .expect("invalid metadata type")
+    pub fn metadata(&self) -> &M {
+        &self.inner.metadata
     }
 
     pub fn pause(&self) {
@@ -94,12 +112,16 @@ impl Handle {
     }
 }
 
-struct Task {
-    handle: Handle,
-    fut: Pin<Box<dyn Future<Output = Result> + Send + Sync>>,
+struct Task<M, V, E, F> {
+    handle: Handle<M, V, E>,
+    fut: F,
 }
 
-impl Future for Task {
+impl<M, V, E, F> Future for Task<M, V, E, F>
+where
+    M: Debug,
+    F: Future<Output = Result<V, E>> + Unpin,
+{
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -108,10 +130,14 @@ impl Future for Task {
             let mut state = this.handle.state_mut();
             match state.deref_mut() {
                 State::Pending => {
+                    trace!(?this.handle, "poll pending");
+
                     *state = State::Running;
                     continue;
                 }
                 State::Running => {
+                    trace!(?this.handle, "poll running");
+
                     let fut = Pin::new(&mut this.fut);
                     match fut.poll(cx) {
                         Poll::Ready(res) => {
@@ -128,15 +154,17 @@ impl Future for Task {
                     return Poll::Pending;
                 }
                 State::Paused => {
+                    trace!(?this.handle, "poll paused");
+
                     this.handle.waker().replace(cx.waker().clone());
                     return Poll::Pending;
                 }
                 State::Cancelled => {
-                    warn!("task cancelled");
+                    warn!(?this.handle, "task cancelled");
                     return Poll::Ready(());
                 }
                 State::Finished(_) => {
-                    info!("successfully finished");
+                    info!(?this.handle, "successfully finished");
                     return Poll::Ready(());
                 }
                 State::Failed(_) => {
@@ -180,22 +208,28 @@ impl Manager {
     }
 
     #[instrument(skip(taskgen))]
-    pub fn new_task<T, F>(&mut self, metadata: T, taskgen: fn(Handle) -> F) -> Handle
+    pub fn new_task<M, V, E, F>(
+        &mut self,
+        metadata: M,
+        taskgen: for<'a> fn(&'a M) -> F,
+    ) -> Handle<M, V, E>
     where
-        T: Any + Debug + Send + Sync,
-        F: IntoFuture<Output = Result>,
-        <F as IntoFuture>::IntoFuture: Send + Sync + 'static,
+        M: Debug + Send + Sync + 'static,
+        V: Send + Sync + 'static,
+        E: Send + Sync + 'static,
+        F: IntoFuture<Output = Result<V, E>>,
+        <F as IntoFuture>::IntoFuture: Unpin + Send + Sync + 'static,
     {
         let handle = Handle {
             inner: Arc::new(Inner {
-                metadata: Box::new(metadata),
-                state: Default::default(),
-                waker: Default::default(),
+                metadata,
+                state: RwLock::new(State::Pending),
+                waker: Mutex::new(None),
             }),
         };
         let task = Task {
             handle: handle.clone(),
-            fut: Box::pin(taskgen(handle.clone()).into_future()),
+            fut: taskgen(handle.metadata()).into_future(),
         };
         let semaphore = self.semaphore.clone();
         self.tasks.spawn(
