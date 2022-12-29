@@ -1,7 +1,4 @@
-use std::{
-    borrow::Cow,
-    path::{Path, PathBuf},
-};
+use std::{borrow::Cow, path::PathBuf};
 
 use url::Url;
 
@@ -9,15 +6,14 @@ pub mod sources;
 // TODO : rename
 pub mod io;
 
-// I can't create &'static Path, should it be replaces w/ PathBuf-s?
 #[derive(Debug)]
 pub struct Dirs {
-    pub root: Cow<'static, Path>,
-    pub assets: Cow<'static, Path>,
-    pub libraries: Cow<'static, Path>,
+    pub root: PathBuf,
+    pub assets: PathBuf,
+    pub libraries: PathBuf,
     // TODO : where to store natives? globally?
-    pub natives: Cow<'static, Path>,
-    pub versions: Cow<'static, Path>,
+    pub natives: PathBuf,
+    pub versions: PathBuf,
 }
 
 impl Default for Dirs {
@@ -27,11 +23,11 @@ impl Default for Dirs {
             .or_else(|| dirs::home_dir().map(|p| p.join(".minecraft")))
             .expect("can't get root dir");
         Self {
-            root: Cow::Owned(root_dir.clone()),
-            assets: Cow::Owned(root_dir.join("assets")),
-            libraries: Cow::Owned(root_dir.join("libraries")),
-            natives: Cow::Owned(root_dir.join("natives")),
-            versions: Cow::Owned(root_dir.join("versions")),
+            root: root_dir.clone(),
+            assets: root_dir.join("assets"),
+            libraries: root_dir.join("libraries"),
+            natives: root_dir.join("natives"),
+            versions: root_dir.join("versions"),
         }
     }
 }

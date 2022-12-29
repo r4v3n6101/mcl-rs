@@ -22,6 +22,7 @@ pub struct DownloadItem {
 }
 
 impl DownloadItem {
+    #[instrument]
     pub fn new(value: Source<'_>, dirs: &Dirs) -> Self {
         Self {
             path: value.local_path(dirs),
