@@ -1,22 +1,21 @@
 use std::{
     any::Any,
     error::Error,
-    fmt::Debug,
-    future::Future,
+    fmt::{self, Debug},
+    future::{Future, IntoFuture},
     ops::{Deref, DerefMut},
     pin::Pin,
+    result,
     sync::{Arc, Mutex, RwLock},
     task::{Context, Poll, Waker},
 };
 
 use tokio::{sync::Semaphore, task::JoinSet};
-use tracing::{info, instrument, trace, warn, Instrument};
+use tracing::{info, info_span, instrument, trace, warn, Instrument};
 
 pub type StdError = Box<dyn Error + Send + Sync + 'static>;
 pub type Value = Box<dyn Any + Send + Sync>;
-pub type Metadata = Box<dyn Any + Send + Sync>;
-
-pub type FutureTask = Pin<Box<dyn Future<Output = Result<Value, StdError>> + Send + Sync>>;
+pub type Result = result::Result<Value, StdError>;
 
 #[derive(Debug, Default)]
 pub enum State {
@@ -30,14 +29,13 @@ pub enum State {
     Failed(StdError),
 }
 
-#[derive(Debug)]
 struct Inner {
-    metadata: Metadata,
+    metadata: Box<dyn Any + Send + Sync>,
     state: RwLock<State>,
     waker: Mutex<Option<Waker>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Handle {
     inner: Arc<Inner>,
 }
@@ -67,7 +65,7 @@ impl Handle {
         if matches!(state, State::Running) {
             *state = State::Paused;
             if let Some(waker) = self.waker().take() {
-                trace!(?self, "waking up for pause");
+                trace!("waking up for pause");
                 waker.wake();
             }
         }
@@ -78,7 +76,7 @@ impl Handle {
         if matches!(state, State::Paused) {
             *state = State::Running;
             if let Some(waker) = self.waker().take() {
-                trace!(?self, "waking up for resume");
+                trace!("waking up for resume");
                 waker.wake();
             }
         }
@@ -89,7 +87,7 @@ impl Handle {
         if matches!(state, State::Running | State::Paused) {
             *state = State::Cancelled;
             if let Some(waker) = self.waker().take() {
-                trace!(?self, "waking up for cancel");
+                trace!("waking up for cancel");
                 waker.wake();
             }
         }
@@ -98,7 +96,7 @@ impl Handle {
 
 struct Task {
     handle: Handle,
-    fut: FutureTask,
+    fut: Pin<Box<dyn Future<Output = Result> + Send + Sync>>,
 }
 
 impl Future for Task {
@@ -110,12 +108,10 @@ impl Future for Task {
             let mut state = this.handle.state_mut();
             match state.deref_mut() {
                 State::Pending => {
-                    trace!(?this.handle, "poll pending");
                     *state = State::Running;
                     continue;
                 }
                 State::Running => {
-                    trace!(?this.handle, "poll running");
                     let fut = Pin::new(&mut this.fut);
                     match fut.poll(cx) {
                         Poll::Ready(res) => {
@@ -132,20 +128,19 @@ impl Future for Task {
                     return Poll::Pending;
                 }
                 State::Paused => {
-                    trace!(?this.handle, "poll paused");
                     this.handle.waker().replace(cx.waker().clone());
                     return Poll::Pending;
                 }
                 State::Cancelled => {
-                    warn!(?this.handle, "task cancelled");
+                    warn!("task cancelled");
                     return Poll::Ready(());
                 }
                 State::Finished(_) => {
-                    info!(?this.handle, "successfully finished");
+                    info!("successfully finished");
                     return Poll::Ready(());
                 }
                 State::Failed(_) => {
-                    warn!(?this.handle, "finished with failure");
+                    warn!("finished with failure");
                     return Poll::Ready(());
                 }
             }
@@ -153,10 +148,19 @@ impl Future for Task {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Manager {
     semaphore: Option<Arc<Semaphore>>,
     tasks: JoinSet<()>,
+}
+
+impl Debug for Manager {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Manager")
+            .field("tasks", &self.tasks())
+            .field("permits", &self.permits())
+            .finish()
+    }
 }
 
 impl Manager {
@@ -167,12 +171,21 @@ impl Manager {
         }
     }
 
-    #[instrument]
-    pub fn execute_task<T: Any + Debug + Send + Sync>(
-        &mut self,
-        metadata: T,
-        taskgen: fn(Handle) -> FutureTask,
-    ) -> Handle {
+    pub fn tasks(&self) -> usize {
+        self.tasks.len()
+    }
+
+    pub fn permits(&self) -> Option<usize> {
+        self.semaphore.as_ref().map(|sem| sem.available_permits())
+    }
+
+    #[instrument(skip(taskgen))]
+    pub fn new_task<T, F>(&mut self, metadata: T, taskgen: fn(Handle) -> F) -> Handle
+    where
+        T: Any + Debug + Send + Sync,
+        F: IntoFuture<Output = Result>,
+        <F as IntoFuture>::IntoFuture: Send + Sync + 'static,
+    {
         let handle = Handle {
             inner: Arc::new(Inner {
                 metadata: Box::new(metadata),
@@ -182,7 +195,7 @@ impl Manager {
         };
         let task = Task {
             handle: handle.clone(),
-            fut: taskgen(handle.clone()),
+            fut: Box::pin(taskgen(handle.clone()).into_future()),
         };
         let semaphore = self.semaphore.clone();
         self.tasks.spawn(
@@ -197,9 +210,9 @@ impl Manager {
                 trace!("permit acquired");
                 task.await
             }
-            .in_current_span(),
+            .instrument(info_span!("task_execute")),
         );
-        info!(?handle, "new task spawned");
+        info!("spawned");
 
         handle
     }
