@@ -1,42 +1,33 @@
 use std::{
     fmt::{self, Debug},
     future::{Future, IntoFuture},
-    ops::{Deref, DerefMut},
+    ops::Deref,
     pin::Pin,
     sync::{Arc, Mutex, RwLock},
     task::{Context, Poll, Waker},
 };
 
+use crossbeam_utils::atomic::AtomicCell;
 use tokio::{sync::Semaphore, task::JoinSet};
 use tracing::{info, info_span, instrument, trace, warn, Instrument};
 
-pub enum State<V, E> {
+#[derive(Default, Debug, Copy, Clone)]
+pub enum State {
+    #[default]
     Pending,
     Running,
     Paused,
     Cancelled,
 
-    Finished(V),
-    Failed(E),
-}
-
-impl<V, E> Debug for State<V, E> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match &self {
-            State::Pending => "Pending",
-            State::Running => "Running",
-            State::Paused => "Paused",
-            State::Cancelled => "Cancelled",
-            State::Finished(_) => "Finished",
-            State::Failed(_) => "Failed",
-        })
-    }
+    Finished,
+    Failed,
 }
 
 struct Inner<M, V, E> {
     metadata: M,
-    state: RwLock<State<V, E>>,
+    state: AtomicCell<State>,
     waker: Mutex<Option<Waker>>,
+    result: RwLock<Option<Result<V, E>>>,
 }
 
 pub struct Handle<M, V, E> {
@@ -55,59 +46,63 @@ impl<M: Debug, V, E> Debug for Handle<M, V, E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Handle")
             .field("metadata", &self.inner.metadata)
-            // TODO : may deadlock
-            .field("state", self.state().deref())
+            .field("state", &self.inner.state)
             .finish()
     }
 }
 
 impl<M, V, E> Handle<M, V, E> {
-    fn waker(&self) -> impl DerefMut<Target = Option<Waker>> + '_ {
-        self.inner.waker.lock().unwrap()
+    fn change_result(&self, res: Result<V, E>) {
+        self.inner.result.write().unwrap().replace(res);
     }
 
-    fn state_mut(&self) -> impl DerefMut<Target = State<V, E>> + '_ {
-        self.inner.state.write().unwrap()
+    fn change_state(&self, state: State) {
+        self.inner.state.store(state)
     }
 
-    pub fn state(&self) -> impl Deref<Target = State<V, E>> + '_ {
-        self.inner.state.read().unwrap()
+    fn change_waker(&self, waker: Waker) {
+        self.inner.waker.lock().unwrap().replace(waker);
+    }
+
+    fn wakeup(&self) {
+        if let Some(waker) = self.inner.waker.lock().unwrap().take() {
+            trace!("waking up task");
+            waker.wake();
+        } else {
+            warn!("no waker");
+        }
+    }
+
+    pub fn state(&self) -> State {
+        self.inner.state.load()
     }
 
     pub fn metadata(&self) -> &M {
         &self.inner.metadata
     }
 
+    pub fn result(&self) -> impl Deref<Target = Option<Result<V, E>>> + '_ {
+        self.inner.result.read().unwrap()
+    }
+
     pub fn pause(&self) {
-        let state = &mut *self.state_mut();
-        if matches!(state, State::Running) {
-            *state = State::Paused;
-            if let Some(waker) = self.waker().take() {
-                trace!("waking up for pause");
-                waker.wake();
-            }
+        if matches!(self.state(), State::Running) {
+            self.change_state(State::Paused);
+            self.wakeup();
         }
     }
 
     pub fn resume(&self) {
-        let state = &mut *self.state_mut();
-        if matches!(state, State::Paused) {
-            *state = State::Running;
-            if let Some(waker) = self.waker().take() {
-                trace!("waking up for resume");
-                waker.wake();
-            }
+        if matches!(self.state(), State::Paused) {
+            self.change_state(State::Running);
+            self.wakeup();
         }
     }
 
     pub fn cancel(&self) {
-        let state = &mut *self.state_mut();
-        if matches!(state, State::Running | State::Paused) {
-            *state = State::Cancelled;
-            if let Some(waker) = self.waker().take() {
-                trace!("waking up for cancel");
-                waker.wake();
-            }
+        if matches!(self.state(), State::Running | State::Paused) {
+            self.change_state(State::Cancelled);
+            self.wakeup();
         }
     }
 }
@@ -127,12 +122,11 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         loop {
-            let mut state = this.handle.state_mut();
-            match state.deref_mut() {
+            match this.handle.state() {
                 State::Pending => {
                     trace!(?this.handle, "poll pending");
 
-                    *state = State::Running;
+                    this.handle.change_state(State::Running);
                     continue;
                 }
                 State::Running => {
@@ -142,13 +136,19 @@ where
                     match fut.poll(cx) {
                         Poll::Ready(res) => {
                             match res {
-                                Ok(val) => *state = State::Finished(val),
-                                Err(e) => *state = State::Failed(e),
+                                Ok(val) => {
+                                    this.handle.change_state(State::Finished);
+                                    this.handle.change_result(Ok(val));
+                                }
+                                Err(e) => {
+                                    this.handle.change_state(State::Failed);
+                                    this.handle.change_result(Err(e));
+                                }
                             }
                             continue;
                         }
                         Poll::Pending => {
-                            this.handle.waker().replace(cx.waker().clone());
+                            this.handle.change_waker(cx.waker().clone());
                         }
                     }
                     return Poll::Pending;
@@ -156,19 +156,19 @@ where
                 State::Paused => {
                     trace!(?this.handle, "poll paused");
 
-                    this.handle.waker().replace(cx.waker().clone());
+                    this.handle.change_waker(cx.waker().clone());
                     return Poll::Pending;
                 }
                 State::Cancelled => {
                     warn!(?this.handle, "task cancelled");
                     return Poll::Ready(());
                 }
-                State::Finished(_) => {
+                State::Finished => {
                     info!(?this.handle, "successfully finished");
                     return Poll::Ready(());
                 }
-                State::Failed(_) => {
-                    warn!("finished with failure");
+                State::Failed => {
+                    warn!(?this.handle, "finished with failure");
                     return Poll::Ready(());
                 }
             }
@@ -223,8 +223,9 @@ impl Manager {
         let handle = Handle {
             inner: Arc::new(Inner {
                 metadata,
-                state: RwLock::new(State::Pending),
-                waker: Mutex::new(None),
+                state: Default::default(),
+                waker: Default::default(),
+                result: Default::default(),
             }),
         };
         let task = Task {
