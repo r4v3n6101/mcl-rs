@@ -18,23 +18,21 @@ pub enum State {
     Running,
     Paused,
     Cancelled,
-
     Finished,
-    Failed,
 }
 
-struct Inner<M, V, E> {
+struct Inner<M, R> {
     metadata: M,
     state: AtomicCell<State>,
     waker: Mutex<Option<Waker>>,
-    result: RwLock<Option<Result<V, E>>>,
+    result: RwLock<Option<R>>,
 }
 
-pub struct Handle<M, V, E> {
-    inner: Arc<Inner<M, V, E>>,
+pub struct Handle<M, R> {
+    inner: Arc<Inner<M, R>>,
 }
 
-impl<M, V, E> Clone for Handle<M, V, E> {
+impl<M, R> Clone for Handle<M, R> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -42,7 +40,15 @@ impl<M, V, E> Clone for Handle<M, V, E> {
     }
 }
 
-impl<M: Debug, V, E> Debug for Handle<M, V, E> {
+impl<M, R> Deref for Handle<M, R> {
+    type Target = M;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner.metadata
+    }
+}
+
+impl<M: Debug, R> Debug for Handle<M, R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Handle")
             .field("metadata", &self.inner.metadata)
@@ -51,9 +57,9 @@ impl<M: Debug, V, E> Debug for Handle<M, V, E> {
     }
 }
 
-impl<M, V, E> Handle<M, V, E> {
-    fn change_result(&self, res: Result<V, E>) {
-        self.inner.result.write().unwrap().replace(res);
+impl<M, R> Handle<M, R> {
+    fn change_result(&self, result: R) {
+        self.inner.result.write().unwrap().replace(result);
     }
 
     fn change_state(&self, state: State) {
@@ -77,11 +83,7 @@ impl<M, V, E> Handle<M, V, E> {
         self.inner.state.load()
     }
 
-    pub fn metadata(&self) -> &M {
-        &self.inner.metadata
-    }
-
-    pub fn result(&self) -> impl Deref<Target = Option<Result<V, E>>> + '_ {
+    pub fn result(&self) -> impl Deref<Target = Option<R>> + '_ {
         self.inner.result.read().unwrap()
     }
 
@@ -107,15 +109,15 @@ impl<M, V, E> Handle<M, V, E> {
     }
 }
 
-struct Task<M, V, E, F> {
-    handle: Handle<M, V, E>,
+struct Task<M, R, F> {
+    handle: Handle<M, R>,
     fut: F,
 }
 
-impl<M, V, E, F> Future for Task<M, V, E, F>
+impl<M, R, F> Future for Task<M, R, F>
 where
     M: Debug,
-    F: Future<Output = Result<V, E>> + Unpin,
+    F: Future<Output = R> + Unpin,
 {
     type Output = ();
 
@@ -135,16 +137,8 @@ where
                     let fut = Pin::new(&mut this.fut);
                     match fut.poll(cx) {
                         Poll::Ready(res) => {
-                            match res {
-                                Ok(val) => {
-                                    this.handle.change_state(State::Finished);
-                                    this.handle.change_result(Ok(val));
-                                }
-                                Err(e) => {
-                                    this.handle.change_state(State::Failed);
-                                    this.handle.change_result(Err(e));
-                                }
-                            }
+                            this.handle.change_state(State::Finished);
+                            this.handle.change_result(res);
                             continue;
                         }
                         Poll::Pending => {
@@ -159,16 +153,8 @@ where
                     this.handle.change_waker(cx.waker().clone());
                     return Poll::Pending;
                 }
-                State::Cancelled => {
-                    warn!(?this.handle, "task cancelled");
-                    return Poll::Ready(());
-                }
-                State::Finished => {
-                    info!(?this.handle, "successfully finished");
-                    return Poll::Ready(());
-                }
-                State::Failed => {
-                    warn!(?this.handle, "finished with failure");
+                State::Finished | State::Cancelled => {
+                    info!(?this.handle, "task finished");
                     return Poll::Ready(());
                 }
             }
@@ -208,16 +194,11 @@ impl Manager {
     }
 
     #[instrument(skip(taskgen))]
-    pub fn new_task<M, V, E, F>(
-        &mut self,
-        metadata: M,
-        taskgen: fn(Handle<M, V, E>) -> F,
-    ) -> Handle<M, V, E>
+    pub fn new_task<M, R, F>(&mut self, metadata: M, taskgen: fn(Handle<M, R>) -> F) -> Handle<M, R>
     where
         M: Debug + Send + Sync + 'static,
-        V: Send + Sync + 'static,
-        E: Send + Sync + 'static,
-        F: IntoFuture<Output = Result<V, E>>,
+        R: Send + Sync + 'static,
+        F: IntoFuture<Output = R>,
         <F as IntoFuture>::IntoFuture: Send + 'static,
     {
         let handle = Handle {

@@ -112,15 +112,12 @@ impl DownloadItem {
     }
 }
 
-// TODO : temporaliry solution
-pub async fn download_only_task(handle: Handle<DownloadItem, (), io::Error>) -> io::Result<()> {
-    handle.metadata().download(&Default::default()).await?;
-
-    Ok(())
-}
-
-pub async fn download_json_task<T: DeserializeOwned>(
-    handle: Handle<DownloadItem, T, io::Error>,
+// TODO : temporaliry solution, need more generic
+pub async fn download_task<T: DeserializeOwned>(
+    handle: Handle<DownloadItem, io::Result<T>>,
 ) -> io::Result<T> {
-    handle.metadata().download_json(&Default::default()).await
+    let buf = handle.download(&Default::default()).await?;
+    info_span!("deserialize_json").in_scope(|| {
+        serde_json::from_slice::<T>(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    })
 }
