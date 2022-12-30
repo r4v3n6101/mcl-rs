@@ -211,14 +211,14 @@ impl Manager {
     pub fn new_task<M, V, E, F>(
         &mut self,
         metadata: M,
-        taskgen: for<'a> fn(&'a M) -> F,
+        taskgen: fn(Handle<M, V, E>) -> F,
     ) -> Handle<M, V, E>
     where
         M: Debug + Send + Sync + 'static,
         V: Send + Sync + 'static,
         E: Send + Sync + 'static,
         F: IntoFuture<Output = Result<V, E>>,
-        <F as IntoFuture>::IntoFuture: Unpin + Send + Sync + 'static,
+        <F as IntoFuture>::IntoFuture: Send + 'static,
     {
         let handle = Handle {
             inner: Arc::new(Inner {
@@ -229,7 +229,7 @@ impl Manager {
         };
         let task = Task {
             handle: handle.clone(),
-            fut: taskgen(handle.metadata()).into_future(),
+            fut: Box::pin(taskgen(handle.clone()).into_future()),
         };
         let semaphore = self.semaphore.clone();
         self.tasks.spawn(

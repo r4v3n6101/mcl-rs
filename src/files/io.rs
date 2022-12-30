@@ -11,6 +11,8 @@ use tokio::fs::{self, create_dir_all};
 use tracing::{info_span, instrument, trace, Instrument};
 use url::Url;
 
+use crate::tasks::Handle;
+
 use super::{Dirs, Source};
 
 #[derive(Debug)]
@@ -108,4 +110,17 @@ impl DownloadItem {
             serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
         })
     }
+}
+
+// TODO : temporaliry solution
+pub async fn download_only_task(handle: Handle<DownloadItem, (), io::Error>) -> io::Result<()> {
+    handle.metadata().download(&Default::default()).await?;
+
+    Ok(())
+}
+
+pub async fn download_json_task<T: DeserializeOwned>(
+    handle: Handle<DownloadItem, T, io::Error>,
+) -> io::Result<T> {
+    handle.metadata().download_json(&Default::default()).await
 }
