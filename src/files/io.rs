@@ -1,7 +1,10 @@
 use std::{
+    any::Any,
     fmt::Debug,
-    io,
-    path::PathBuf,
+    future::Future,
+    io::{self, Cursor},
+    path::{Path, PathBuf},
+    pin::Pin,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -10,46 +13,92 @@ use serde::de::DeserializeOwned;
 use tokio::fs::{self, create_dir_all};
 use tracing::{info_span, instrument, trace, Instrument};
 use url::Url;
+use zip::ZipArchive;
 
-use crate::tasks::Handle;
+use crate::{
+    metadata::{assets::AssetIndex, game::VersionInfo},
+    tasks::{GenerateTask, Handle},
+};
 
-use super::{Dirs, Source};
+use super::{ContentType, Dirs, Source};
 
+type PinBoxFut<R> = Pin<Box<dyn Future<Output = R> + Send + Sync + 'static>>;
+type OwnedZipArchive = ZipArchive<Cursor<Vec<u8>>>;
+
+#[derive(Debug, Copy, Clone, Default)]
+pub enum Validation {
+    NoneAtAll,
+    Force,
+    #[default]
+    Usual,
+}
+
+// TODO : try to generify w/ lifetime for source, not to cloning some data
+// Currently impossible, because Manager::new_task awaits M: 'static
 #[derive(Debug)]
-pub struct DownloadItem {
+pub struct SyncTask {
+    client: Client,
+    progress: AtomicU64,
+
     url: Url,
-    path: Option<PathBuf>,
-    count: AtomicU64,
+    path: PathBuf,
+    validation: Validation,
+    r#type: ContentType,
     size: Option<u64>,
 }
 
-impl DownloadItem {
-    #[instrument]
-    pub fn new(value: Source<'_>, dirs: &Dirs) -> Self {
+impl SyncTask {
+    pub fn new(source: Source<'_>, dirs: &Dirs) -> Self {
         Self {
-            path: value.local_path(dirs),
-            url: value.url.into_owned(),
-            count: Default::default(),
-            size: value.size,
+            path: source.local_path(dirs),
+            size: source.size,
+            r#type: source.r#type,
+            url: source.url.into_owned(),
+
+            client: Client::new(),
+            progress: AtomicU64::new(0),
+            validation: Validation::Usual,
         }
     }
 
+    pub fn with_client(self, client: Client) -> Self {
+        Self { client, ..self }
+    }
+
+    pub fn with_validation(self, validation: Validation) -> Self {
+        Self { validation, ..self }
+    }
+
+    pub fn path(&self) -> &Path {
+        self.path.as_path()
+    }
+
+    pub fn progress(&self) -> u64 {
+        self.progress.load(Ordering::Relaxed)
+    }
+
+    pub fn size(&self) -> Option<u64> {
+        self.size
+    }
+
     #[instrument]
-    pub async fn validate_local(&self) -> io::Result<bool> {
-        match self.path.as_ref() {
-            Some(path) => match fs::metadata(path).await {
+    async fn is_valid(&self) -> io::Result<bool> {
+        match self.validation {
+            Validation::NoneAtAll => Ok(true),
+            Validation::Force => Ok(false),
+            Validation::Usual => match fs::metadata(&self.path).await {
                 Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
                 Ok(_) if self.size.is_none() => Ok(true),
                 Ok(metadata) => Ok(metadata.len() == self.size.unwrap()),
                 Err(e) => Err(e),
             },
-            _ => Ok(true),
         }
     }
 
     #[instrument]
-    pub async fn download(&self, client: &Client) -> io::Result<Vec<u8>> {
-        let mut response = client
+    async fn download(&self) -> io::Result<Vec<u8>> {
+        let mut response = self
+            .client
             .get(self.url.clone())
             .send()
             .instrument(info_span!("wait_for_response"))
@@ -78,7 +127,7 @@ impl DownloadItem {
                 let len = chunk.len();
                 trace!(len, "new chunk arrived");
                 buf.extend_from_slice(chunk.as_ref());
-                self.count.fetch_add(len as u64, Ordering::Relaxed);
+                self.progress.fetch_add(len as u64, Ordering::Relaxed);
             }
 
             io::Result::Ok(buf)
@@ -86,38 +135,75 @@ impl DownloadItem {
         .instrument(info_span!("fetch_data"))
         .await?;
 
-        if let Some(path) = self.path.as_ref() {
-            async {
-                if let Some(parent) = path.parent() {
-                    create_dir_all(parent).await?;
-                }
-                fs::write(path, &buf).await?;
-
-                io::Result::Ok(())
-            }
-            .instrument(info_span!("write_to_file"))
-            .await?;
-        }
-
         Ok(buf)
     }
 
     #[instrument]
-    pub async fn download_json<T: DeserializeOwned>(&self, client: &Client) -> io::Result<T> {
-        let buf = self.download(client).await?;
+    async fn read_local(&self) -> io::Result<Vec<u8>> {
+        fs::read(&self.path).await
+    }
 
-        info_span!("deserialize_json").in_scope(|| {
-            serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-        })
+    #[instrument(skip(buf))]
+    fn deserialize_json<T: DeserializeOwned>(&self, buf: &[u8]) -> io::Result<T> {
+        serde_json::from_slice(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    #[instrument(skip(buf))]
+    async fn write_to_file(&self, buf: &[u8]) -> io::Result<()> {
+        if let Some(parent) = self.path.parent() {
+            create_dir_all(parent).await?;
+        }
+        fs::write(&self.path, buf).await
+    }
+
+    #[instrument(skip(buf))]
+    fn read_zip(&self, buf: Vec<u8>) -> io::Result<OwnedZipArchive> {
+        // TODO : error
+        ZipArchive::new(Cursor::new(buf)).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
     }
 }
 
-// TODO : temporaliry solution, need more generic
-pub async fn download_task<T: DeserializeOwned>(
-    handle: Handle<DownloadItem, io::Result<T>>,
-) -> io::Result<T> {
-    let buf = handle.download(&Default::default()).await?;
-    info_span!("deserialize_json").in_scope(|| {
-        serde_json::from_slice::<T>(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-    })
+impl GenerateTask for SyncTask {
+    type Output = io::Result<Box<dyn Any + Send + Sync + 'static>>;
+    type Future = PinBoxFut<Self::Output>;
+
+    fn task(handle: Handle<Self, Self::Output>) -> Self::Future {
+        Box::pin(
+            async move {
+                let is_valid = handle.is_valid().await?;
+                if let ty @ (ContentType::AssetIndex
+                | ContentType::VersionInfo
+                | ContentType::NativeLibrary) = handle.r#type
+                {
+                    let bytes = if is_valid {
+                        handle.read_local().await?
+                    } else {
+                        let buf = handle.download().await?;
+                        handle.write_to_file(&buf).await?;
+                        buf
+                    };
+
+                    match ty {
+                        ContentType::AssetIndex => Self::Output::Ok(Box::new(
+                            handle.deserialize_json::<AssetIndex>(&bytes)?,
+                        )),
+                        ContentType::VersionInfo => Self::Output::Ok(Box::new(
+                            handle.deserialize_json::<VersionInfo>(&bytes)?,
+                        )),
+                        ContentType::NativeLibrary => {
+                            Self::Output::Ok(Box::new(handle.read_zip(bytes)?))
+                        }
+                        _ => unreachable!(),
+                    }
+                } else {
+                    if !is_valid {
+                        let buf = handle.download().await?;
+                        handle.write_to_file(&buf).await?;
+                    }
+                    Self::Output::Ok(Box::new(()))
+                }
+            }
+            .in_current_span(),
+        )
+    }
 }

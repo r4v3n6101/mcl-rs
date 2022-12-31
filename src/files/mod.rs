@@ -41,7 +41,6 @@ pub enum ContentType {
     NativeLibrary,
     ClientJar,
     VersionInfo,
-    VersionsManifest,
 }
 
 #[derive(Debug)]
@@ -55,23 +54,16 @@ pub struct Source<'list> {
 }
 
 impl Source<'_> {
-    pub fn local_path(&self, dirs: &Dirs) -> Option<PathBuf> {
+    pub fn local_path(&self, dirs: &Dirs) -> PathBuf {
         match self.r#type {
-            ContentType::AssetIndex => {
-                Some(dirs.assets.join(format!("indexes/{}.json", self.name)))
-            }
-            ContentType::Asset => Some(dirs.assets.join("objects").join(self.name.as_ref())),
-            ContentType::LegacyAsset => Some(dirs.assets.join("legacy").join(self.name.as_ref())),
+            ContentType::AssetIndex => dirs.assets.join(format!("indexes/{}.json", self.name)),
+            ContentType::Asset => dirs.assets.join("objects").join(self.name.as_ref()),
+            ContentType::LegacyAsset => dirs.assets.join("legacy").join(self.name.as_ref()),
             ContentType::Library | ContentType::NativeLibrary => {
-                Some(dirs.libraries.join(self.name.as_ref()))
+                dirs.libraries.join(self.name.as_ref())
             }
-            ContentType::ClientJar => {
-                Some(dirs.versions.join(self.name.as_ref()).join("client.jar"))
-            }
-            ContentType::VersionInfo => {
-                Some(dirs.versions.join(self.name.as_ref()).join("info.json"))
-            }
-            ContentType::VersionsManifest => None,
+            ContentType::ClientJar => dirs.versions.join(self.name.as_ref()).join("client.jar"),
+            ContentType::VersionInfo => dirs.versions.join(self.name.as_ref()).join("info.json"),
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::{
     fmt::{self, Debug},
-    future::{Future, IntoFuture},
+    future::Future,
     ops::Deref,
     pin::Pin,
     sync::{Arc, Mutex, RwLock},
@@ -162,6 +162,13 @@ where
     }
 }
 
+pub trait GenerateTask: Sized {
+    type Output;
+    type Future: Future<Output = Self::Output> + Send + Unpin;
+
+    fn task(handle: Handle<Self, Self::Output>) -> Self::Future;
+}
+
 #[derive(Default)]
 pub struct Manager {
     semaphore: Option<Arc<Semaphore>>,
@@ -193,13 +200,11 @@ impl Manager {
         self.semaphore.as_ref().map(|sem| sem.available_permits())
     }
 
-    #[instrument(skip(taskgen))]
-    pub fn new_task<M, R, F>(&mut self, metadata: M, taskgen: fn(Handle<M, R>) -> F) -> Handle<M, R>
+    #[instrument]
+    pub fn new_task<M, R>(&mut self, metadata: M) -> Handle<M, R>
     where
-        M: Debug + Send + Sync + 'static,
         R: Send + Sync + 'static,
-        F: IntoFuture<Output = R>,
-        <F as IntoFuture>::IntoFuture: Send + 'static,
+        M: GenerateTask<Output = R> + Debug + Send + Sync + 'static,
     {
         let handle = Handle {
             inner: Arc::new(Inner {
@@ -211,7 +216,7 @@ impl Manager {
         };
         let task = Task {
             handle: handle.clone(),
-            fut: Box::pin(taskgen(handle.clone()).into_future()),
+            fut: M::task(handle.clone()),
         };
         let semaphore = self.semaphore.clone();
         self.tasks.spawn(

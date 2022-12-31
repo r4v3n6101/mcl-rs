@@ -1,21 +1,18 @@
-use std::borrow::Cow;
+use std::io;
 
-use url::Url;
+use reqwest::IntoUrl;
 
-use crate::files::{ContentType, Source};
+use crate::metadata::manifest::VersionsManifest;
 
 pub static DEFAULT_RESOURCES_URL: &str = "http://resources.download.minecraft.net";
 pub static DEFAULT_MANIFEST_URL: &str =
     "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 
-// Should be static in future
-pub fn default_manifest() -> Source<'static> {
-    // can't change Owned to Borrowed because Url can't be created constantly
-    Source {
-        url: Cow::Owned(Url::parse(DEFAULT_MANIFEST_URL).unwrap()),
-        name: Cow::Borrowed("default"),
-        r#type: ContentType::VersionsManifest,
-        hash: None,
-        size: None,
-    }
+pub async fn fetch_manifest(url: impl IntoUrl) -> io::Result<VersionsManifest> {
+    reqwest::get(url)
+        .await
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+        .json()
+        .await
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
