@@ -16,7 +16,7 @@ use url::Url;
 use zip::ZipArchive;
 
 use crate::{
-    metadata::{assets::AssetIndex, game::VersionInfo},
+    metadata::{assets::AssetIndex, game::VersionInfo, manifest::VersionsManifest},
     tasks::{GenerateTask, Handle},
 };
 
@@ -55,9 +55,9 @@ impl SyncTask {
             r#type: source.r#type,
             url: source.url.into_owned(),
 
-            client: Client::new(),
-            progress: AtomicU64::new(0),
-            validation: Validation::Usual,
+            client: Default::default(),
+            progress: Default::default(),
+            validation: Default::default(),
         }
     }
 
@@ -121,11 +121,11 @@ impl SyncTask {
             trace!(buf_size, "allocated buf");
             while let Some(chunk) = response
                 .chunk()
+                .in_current_span()
                 .await
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
             {
                 let len = chunk.len();
-                trace!(len, "new chunk arrived");
                 buf.extend_from_slice(chunk.as_ref());
                 self.progress.fetch_add(len as u64, Ordering::Relaxed);
             }
@@ -170,35 +170,40 @@ impl GenerateTask for SyncTask {
     fn task(handle: Handle<Self, Self::Output>) -> Self::Future {
         Box::pin(
             async move {
-                let is_valid = handle.is_valid().await?;
+                let metadata = handle.metadata();
+                let is_valid = metadata.is_valid().await?;
                 if let ty @ (ContentType::AssetIndex
                 | ContentType::VersionInfo
-                | ContentType::NativeLibrary) = handle.r#type
+                | ContentType::NativeLibrary
+                | ContentType::VersionManifest) = metadata.r#type
                 {
                     let bytes = if is_valid {
-                        handle.read_local().await?
+                        metadata.read_local().await?
                     } else {
-                        let buf = handle.download().await?;
-                        handle.write_to_file(&buf).await?;
+                        let buf = metadata.download().await?;
+                        metadata.write_to_file(&buf).await?;
                         buf
                     };
 
                     match ty {
                         ContentType::AssetIndex => Self::Output::Ok(Box::new(
-                            handle.deserialize_json::<AssetIndex>(&bytes)?,
+                            metadata.deserialize_json::<AssetIndex>(&bytes)?,
                         )),
                         ContentType::VersionInfo => Self::Output::Ok(Box::new(
-                            handle.deserialize_json::<VersionInfo>(&bytes)?,
+                            metadata.deserialize_json::<VersionInfo>(&bytes)?,
+                        )),
+                        ContentType::VersionManifest => Self::Output::Ok(Box::new(
+                            metadata.deserialize_json::<VersionsManifest>(&bytes)?,
                         )),
                         ContentType::NativeLibrary => {
-                            Self::Output::Ok(Box::new(handle.read_zip(bytes)?))
+                            Self::Output::Ok(Box::new(metadata.read_zip(bytes)?))
                         }
                         _ => unreachable!(),
                     }
                 } else {
                     if !is_valid {
-                        let buf = handle.download().await?;
-                        handle.write_to_file(&buf).await?;
+                        let buf = metadata.download().await?;
+                        metadata.write_to_file(&buf).await?;
                     }
                     Self::Output::Ok(Box::new(()))
                 }

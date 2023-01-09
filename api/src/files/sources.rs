@@ -1,5 +1,7 @@
 use std::{borrow::Cow, iter};
 
+use reqwest::IntoUrl;
+
 use crate::metadata::{
     assets::{AssetIndex, AssetMetadata},
     game::VersionInfo,
@@ -7,6 +9,16 @@ use crate::metadata::{
 };
 
 use super::{ContentType, Source, SourcesList};
+
+pub fn manifest(url: impl IntoUrl) -> Source<'static> {
+    Source {
+        r#type: ContentType::VersionManifest,
+        url: Cow::Owned(url.into_url().expect("invalid manifest url")),
+        name: Cow::Borrowed("manifest"),
+        hash: None,
+        size: None,
+    }
+}
 
 impl<'manifest, I> SourcesList<'manifest> for I
 where

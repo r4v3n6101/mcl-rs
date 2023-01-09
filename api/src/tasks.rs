@@ -1,17 +1,19 @@
 use std::{
+    cell::UnsafeCell,
     fmt::{self, Debug},
     future::Future,
-    ops::Deref,
+    mem::MaybeUninit,
     pin::Pin,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
 };
 
 use crossbeam_utils::atomic::AtomicCell;
 use tokio::{sync::Semaphore, task::JoinSet};
-use tracing::{info, info_span, instrument, trace, warn, Instrument};
+use tracing::{info_span, instrument, trace, warn, Instrument};
 
 #[derive(Default, Debug, Copy, Clone)]
+#[repr(u8)]
 pub enum State {
     #[default]
     Pending,
@@ -24,9 +26,11 @@ pub enum State {
 struct Inner<M, R> {
     metadata: M,
     state: AtomicCell<State>,
+    result: UnsafeCell<MaybeUninit<R>>,
     waker: Mutex<Option<Waker>>,
-    result: RwLock<Option<R>>,
 }
+
+unsafe impl<M: Sync, R: Sync> Sync for Inner<M, R> {}
 
 pub struct Handle<M, R> {
     inner: Arc<Inner<M, R>>,
@@ -37,14 +41,6 @@ impl<M, R> Clone for Handle<M, R> {
         Self {
             inner: Arc::clone(&self.inner),
         }
-    }
-}
-
-impl<M, R> Deref for Handle<M, R> {
-    type Target = M;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner.metadata
     }
 }
 
@@ -59,7 +55,8 @@ impl<M: Debug, R> Debug for Handle<M, R> {
 
 impl<M, R> Handle<M, R> {
     fn change_result(&self, result: R) {
-        self.inner.result.write().unwrap().replace(result);
+        // Safety: there're no simultaneously existing references before State::Finished
+        unsafe { (*self.inner.result.get()).write(result) };
     }
 
     fn change_state(&self, state: State) {
@@ -83,8 +80,16 @@ impl<M, R> Handle<M, R> {
         self.inner.state.load()
     }
 
-    pub fn result(&self) -> impl Deref<Target = Option<R>> + '_ {
-        self.inner.result.read().unwrap()
+    pub fn metadata(&self) -> &M {
+        &self.inner.metadata
+    }
+
+    pub fn result(&self) -> Option<&R> {
+        match self.state() {
+            // Safety: result must be initialized at moment when State eq Finished
+            State::Finished => Some(unsafe { (*self.inner.result.get()).assume_init_ref() }),
+            _ => None,
+        }
     }
 
     pub fn pause(&self) {
@@ -126,19 +131,15 @@ where
         loop {
             match this.handle.state() {
                 State::Pending => {
-                    trace!(?this.handle, "poll pending");
-
                     this.handle.change_state(State::Running);
                     continue;
                 }
                 State::Running => {
-                    trace!(?this.handle, "poll running");
-
                     let fut = Pin::new(&mut this.fut);
                     match fut.poll(cx) {
                         Poll::Ready(res) => {
-                            this.handle.change_state(State::Finished);
                             this.handle.change_result(res);
+                            this.handle.change_state(State::Finished);
                             continue;
                         }
                         Poll::Pending => {
@@ -148,13 +149,10 @@ where
                     return Poll::Pending;
                 }
                 State::Paused => {
-                    trace!(?this.handle, "poll paused");
-
                     this.handle.change_waker(cx.waker().clone());
                     return Poll::Pending;
                 }
                 State::Finished | State::Cancelled => {
-                    info!(?this.handle, "task finished");
                     return Poll::Ready(());
                 }
             }
@@ -185,10 +183,10 @@ impl Debug for Manager {
 }
 
 impl Manager {
-    pub fn with_limit(limit: usize) -> Self {
+    pub fn with_limit(self, limit: usize) -> Self {
         Self {
             semaphore: Some(Arc::new(Semaphore::new(limit))),
-            ..Default::default()
+            ..self
         }
     }
 
@@ -209,9 +207,9 @@ impl Manager {
         let handle = Handle {
             inner: Arc::new(Inner {
                 metadata,
+                result: UnsafeCell::new(MaybeUninit::uninit()),
                 state: Default::default(),
                 waker: Default::default(),
-                result: Default::default(),
             }),
         };
         let task = Task {
@@ -233,7 +231,6 @@ impl Manager {
             }
             .instrument(info_span!("task_execute")),
         );
-        info!("spawned");
 
         handle
     }

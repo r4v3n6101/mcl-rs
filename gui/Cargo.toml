@@ -5,3 +5,7 @@ edition = "2021"
 
 [dependencies]
 mcl-api = { path = "../api" }
+tokio = { version = "1", features = ["full"] }
+
+tracing = "0.1"
+tracing-subscriber = "0.3"

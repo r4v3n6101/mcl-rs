@@ -11,8 +11,6 @@ pub struct Dirs {
     pub root: PathBuf,
     pub assets: PathBuf,
     pub libraries: PathBuf,
-    // TODO : where to store natives? globally?
-    pub natives: PathBuf,
     pub versions: PathBuf,
 }
 
@@ -26,7 +24,6 @@ impl Default for Dirs {
             root: root_dir.clone(),
             assets: root_dir.join("assets"),
             libraries: root_dir.join("libraries"),
-            natives: root_dir.join("natives"),
             versions: root_dir.join("versions"),
         }
     }
@@ -41,6 +38,7 @@ pub enum ContentType {
     NativeLibrary,
     ClientJar,
     VersionInfo,
+    VersionManifest,
 }
 
 #[derive(Debug)]
@@ -64,6 +62,7 @@ impl Source<'_> {
             }
             ContentType::ClientJar => dirs.versions.join(self.name.as_ref()).join("client.jar"),
             ContentType::VersionInfo => dirs.versions.join(self.name.as_ref()).join("info.json"),
+            ContentType::VersionManifest => dirs.root.join("manifest.json"),
         }
     }
 }
