@@ -1,2 +1,18 @@
-[workspace]
-members = ["api", "gui"]
+[package]
+name = "mcl-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_with = "3.12"
+url = { version = "2.5", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+sha1_smol = { version = "1.0.1", features = ["serde"] }
+
+[dev-dependencies]
+futures = "0.3"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
