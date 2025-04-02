@@ -1,9 +1,9 @@
-use std::{borrow::Cow, collections::BTreeMap, path::PathBuf};
+use std::{borrow::Cow, collections::BTreeMap, fmt::Display, path::PathBuf};
 
 const LIBRARY_EXTENSION: &str = "jar";
 
-pub fn build_library_path(src: &str, native_str: Option<&str>) -> Option<String> {
-    let mut parts = src.splitn(3, ':');
+pub fn build_library_path(name: &str, hash: &impl Display, native_str: Option<&str>) -> String {
+    let mut parts = name.splitn(3, ':');
     match (parts.next(), parts.next(), parts.next()) {
         (Some(lib), Some(name), Some(version)) => {
             let mut path_buf = PathBuf::new();
@@ -16,9 +16,9 @@ pub fn build_library_path(src: &str, native_str: Option<&str>) -> Option<String>
                 path_buf.push(format!("{name}-{version}.{LIBRARY_EXTENSION}"));
             }
 
-            Some(path_buf.to_string_lossy().into_owned())
+            path_buf.to_string_lossy().into_owned()
         }
-        _ => None,
+        _ => format!("{name}-{hash}.{LIBRARY_EXTENSION}"),
     }
 }
 

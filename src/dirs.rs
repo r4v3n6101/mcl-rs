@@ -20,6 +20,7 @@ impl Dirs {
                 self.libraries.join(src.name.as_ref())
             }
             SourceKind::ClientJar => self.versions.join(src.name.as_ref()).join("client.jar"),
+            SourceKind::ServerJar => self.versions.join(src.name.as_ref()).join("server.jar"),
             SourceKind::VersionInfo => self.versions.join(src.name.as_ref()).join("info.json"),
         }
     }

@@ -24,6 +24,7 @@ pub enum SourceKind {
     Library,
     NativeLibrary,
     ClientJar,
+    ServerJar,
     VersionInfo,
 }
 
@@ -112,6 +113,13 @@ impl<'info, 'params: 'info> SourceList<'info> for ArtifactList<'info, 'params> {
             hash: Some(&info.downloads.client.hash),
             size: Some(info.downloads.client.size),
         });
+        let server_jar = info.downloads.server.as_ref().map(|server| Source {
+            kind: SourceKind::ServerJar,
+            url: Cow::Borrowed(&server.url),
+            name: Cow::Borrowed(&info.id),
+            hash: Some(&server.hash),
+            size: Some(server.size),
+        });
         let libraries = info
             .libraries
             .iter()
@@ -123,10 +131,11 @@ impl<'info, 'params: 'info> SourceList<'info> for ArtifactList<'info, 'params> {
                     name: if let Some(path) = &artifact.path {
                         Cow::Borrowed(path)
                     } else {
-                        Cow::Owned(
-                            util::build_library_path(&lib.name, None)
-                                .unwrap_or_else(|| artifact.resource.hash.to_string()),
-                        )
+                        Cow::Owned(util::build_library_path(
+                            &lib.name,
+                            &artifact.resource.hash,
+                            None,
+                        ))
                     },
                     hash: Some(&artifact.resource.hash),
                     size: Some(artifact.resource.size),
@@ -141,10 +150,11 @@ impl<'info, 'params: 'info> SourceList<'info> for ArtifactList<'info, 'params> {
                     } else {
                         // TODO
                         let native_str = None;
-                        Cow::Owned(
-                            util::build_library_path(&lib.name, native_str)
-                                .unwrap_or_else(|| artifact.resource.hash.to_string()),
-                        )
+                        Cow::Owned(util::build_library_path(
+                            &lib.name,
+                            &artifact.resource.hash,
+                            native_str,
+                        ))
                     },
                     hash: Some(&artifact.resource.hash),
                     size: Some(artifact.resource.size),
@@ -152,6 +162,9 @@ impl<'info, 'params: 'info> SourceList<'info> for ArtifactList<'info, 'params> {
 
                 library.into_iter().chain(natives)
             });
-        asset_index.chain(client_jar).chain(libraries)
+        client_jar
+            .chain(server_jar)
+            .chain(asset_index)
+            .chain(libraries)
     }
 }
