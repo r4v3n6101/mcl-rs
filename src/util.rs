@@ -1,7 +1,5 @@
 use std::{borrow::Cow, collections::BTreeMap, fmt::Display, path::PathBuf};
 
-const LIBRARY_EXTENSION: &str = "jar";
-
 pub fn build_library_path(name: &str, hash: &impl Display, native_str: Option<&str>) -> String {
     let mut parts = name.splitn(3, ':');
     match (parts.next(), parts.next(), parts.next()) {
@@ -10,15 +8,20 @@ pub fn build_library_path(name: &str, hash: &impl Display, native_str: Option<&s
             lib.split('.').for_each(|path| path_buf.push(path));
             path_buf.push(name);
             path_buf.push(version);
-            if let Some(native_str) = native_str {
-                path_buf.push(format!("{name}-{version}-{native_str}.{LIBRARY_EXTENSION}"));
-            } else {
-                path_buf.push(format!("{name}-{version}.{LIBRARY_EXTENSION}"));
+            match native_str {
+                Some(native_str) => path_buf.push(format!("{name}-{version}-{native_str}.jar")),
+                None => path_buf.push(format!("{name}-{version}.jar")),
             }
 
             path_buf.to_string_lossy().into_owned()
         }
-        _ => format!("{name}-{hash}.{LIBRARY_EXTENSION}"),
+        _ => {
+            if !name.is_empty() {
+                format!("{name}-{hash}.jar")
+            } else {
+                format!("{hash}.jar")
+            }
+        }
     }
 }
 
@@ -73,6 +76,36 @@ mod tests {
     use super::*;
     use std::borrow::Cow;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn test_valid_library_path() {
+        let result = build_library_path("com.example:lib:1.0", &"hash", None);
+        assert_eq!(result, "com/example/lib/1.0/lib-1.0.jar");
+    }
+
+    #[test]
+    fn test_valid_library_path_with_native() {
+        let result = build_library_path("com.example:lib:1.0", &"hash", Some("linux"));
+        assert_eq!(result, "com/example/lib/1.0/lib-1.0-linux.jar");
+    }
+
+    #[test]
+    fn test_invalid_library_name() {
+        let result = build_library_path("invalid_lib", &"hash", Some("linux"));
+        assert_eq!(result, "invalid_lib-hash.jar");
+    }
+
+    #[test]
+    fn test_empty_name() {
+        let result = build_library_path("", &"hash", Some("linux"));
+        assert_eq!(result, "hash.jar");
+    }
+
+    #[test]
+    fn test_missing_version() {
+        let result = build_library_path("com.example:lib", &"hash", Some("linux"));
+        assert_eq!(result, "com.example:lib-hash.jar");
+    }
 
     #[test]
     fn test_basic_replacement() {
