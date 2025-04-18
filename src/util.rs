@@ -25,6 +25,16 @@ pub fn build_library_path(name: &str, hash: &impl Display, native_str: Option<&s
     }
 }
 
+pub fn build_jvm_path(jvm_name: &str, os_str: &str, path: &str) -> String {
+    let mut path_buf = PathBuf::with_capacity(2 * jvm_name.len() + os_str.len() + path.len() + 6);
+    path_buf.push(jvm_name);
+    path_buf.push(os_str);
+    path_buf.push(jvm_name);
+    path_buf.push(path);
+
+    path_buf.to_string_lossy().into_owned()
+}
+
 pub fn substitute_params<'a>(template: &'a str, params: &BTreeMap<&str, &str>) -> Cow<'a, str> {
     let mut output: Option<String> = None;
     let mut start = 0;
@@ -105,6 +115,19 @@ mod tests {
     fn test_missing_version() {
         let result = build_library_path("com.example:lib", &"hash", Some("linux"));
         assert_eq!(result, "com.example:lib-hash.jar");
+    }
+
+    #[test]
+    fn test_building_jvm_path() {
+        let result = build_jvm_path(
+            "java-runtime-delta",
+            "mac-os-arm64",
+            "jre.bundle/Contents/Info.plist",
+        );
+        assert_eq!(
+            result,
+            "java-runtime-delta/mac-os-arm64/java-runtime-delta/jre.bundle/Contents/Info.plist"
+        );
     }
 
     #[test]

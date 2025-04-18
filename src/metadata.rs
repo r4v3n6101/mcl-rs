@@ -180,6 +180,65 @@ pub struct LoggerConfig {
 }
 
 #[derive(Deserialize, Debug)]
+pub struct JvmManifest {
+    #[serde(flatten, default)]
+    pub platforms: BTreeMap<String, JvmPlatform>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct JvmPlatform {
+    #[serde(flatten, default)]
+    pub resources: BTreeMap<String, Vec<JvmResource>>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct JvmResource {
+    pub availability: JvmAvailability,
+    #[serde(rename = "manifest")]
+    pub resource: Resource,
+    pub version: JvmVersion,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct JvmAvailability {
+    pub group: u32,
+    pub progress: u32,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct JvmVersion {
+    pub name: String,
+    pub released: DateTime<Utc>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct JvmInfo {
+    #[serde(rename = "files")]
+    pub content: BTreeMap<String, JvmContent>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(tag = "type")]
+#[serde(rename_all = "camelCase")]
+pub enum JvmContent {
+    File(Box<JvmFile>),
+    Link { target: String },
+    Directory,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct JvmFile {
+    pub downloads: JvmFileDownloads,
+    pub executable: bool,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct JvmFileDownloads {
+    pub lzma: Option<Resource>,
+    pub raw: Resource,
+}
+
+#[derive(Deserialize, Debug)]
 pub struct Resource {
     #[serde(rename = "sha1")]
     pub hash: Sha1Hash,

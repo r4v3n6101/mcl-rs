@@ -8,6 +8,7 @@ pub struct Dirs {
     pub assets: PathBuf,
     pub libraries: PathBuf,
     pub versions: PathBuf,
+    pub runtime: PathBuf,
 }
 
 impl Dirs {
@@ -19,13 +20,13 @@ impl Dirs {
                 None,
                 "json",
             ),
-            SourceKind::Asset => build_path(
+            SourceKind::Asset { legacy: false } => build_path(
                 self.assets.clone(),
                 ["objects", src.name.as_ref()],
                 None,
                 None,
             ),
-            SourceKind::LegacyAsset => build_path(
+            SourceKind::Asset { legacy: true } => build_path(
                 self.assets.clone(),
                 ["legacy", src.name.as_ref()],
                 None,
@@ -51,6 +52,35 @@ impl Dirs {
                 [src.name.as_ref(), src.name.as_ref()],
                 None,
                 "json",
+            ),
+            SourceKind::JvmInfo {
+                platform,
+                jvm_mojang_name,
+            } => build_path(
+                self.runtime.clone(),
+                [
+                    jvm_mojang_name,
+                    platform,
+                    jvm_mojang_name,
+                    src.name.as_ref(),
+                ],
+                "_info",
+                "json",
+            ),
+            SourceKind::JvmFile {
+                platform,
+                jvm_mojang_name,
+                ..
+            } => build_path(
+                self.runtime.clone(),
+                [
+                    jvm_mojang_name,
+                    platform,
+                    jvm_mojang_name,
+                    src.name.as_ref(),
+                ],
+                None,
+                None,
             ),
         }
     }
