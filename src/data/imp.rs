@@ -1,17 +1,40 @@
-use std::iter;
-use std::sync::Arc;
+use std::{io, iter, sync::Arc};
+
+use bytes::Bytes;
+use serde::Serialize;
 
 use crate::util;
 
 use super::{
+    Artifact, GetBytes, Source, SourceKind,
     config::{AssetIndexConfig, JvmInfoConfig, VersionInfoConfig},
     mojang::{
         AssetIndex, AssetMetadata, JvmContent, JvmInfo, JvmManifest, JvmPlatform, JvmResource,
         LibraryResource, Resource, VersionInfo, VersionManifest,
     },
     other::{JustFile, ZippedFile},
-    Artifact, Source, SourceKind,
 };
+
+impl<T> GetBytes for T
+where
+    T: Serialize,
+{
+    fn calc_bytes(&self) -> io::Result<Bytes> {
+        Ok(Bytes::from(serde_json::to_vec_pretty(self)?))
+    }
+}
+
+impl GetBytes for JustFile {
+    fn calc_bytes(&self) -> io::Result<Bytes> {
+        Ok(self.data.clone())
+    }
+}
+
+impl GetBytes for ZippedFile {
+    fn calc_bytes(&self) -> io::Result<Bytes> {
+        Ok(self.archive.clone().into_inner().get_ref().clone())
+    }
+}
 
 impl Artifact for JustFile {
     type Config<'this> = ();

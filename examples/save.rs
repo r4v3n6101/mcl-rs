@@ -4,14 +4,14 @@ use std::{
     sync::Arc,
 };
 
-use bytes::Bytes;
-use futures::{stream::FuturesUnordered, StreamExt, TryFutureExt};
+use bytes::BytesMut;
+use futures::{StreamExt, TryFutureExt, stream::FuturesUnordered};
 use mcl_rs::{
     data::{
+        Source, SourceKind,
         config::{AssetIndexConfig, VersionInfoConfig},
         mojang::{AssetIndex, VersionInfo, VersionManifest},
         other::{JustFile, ZippedFile},
-        Source, SourceKind,
     },
     dirs::Dirs,
     resolver::{ErasedArtifact, ResolvedArtifact, ResolvedResult, Resolver},
@@ -23,7 +23,7 @@ use url::Url;
 use zip::ZipArchive;
 
 const RESOURCES_URL: &str = "http://resources.download.minecraft.net";
-const MANIFEST_URL: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+const VERSION_INFO_URL: &str = "https://piston-meta.mojang.com/v1/packages/ed5d8789ed29872ea2ef1c348302b0c55e3f3468/1.7.10.json";
 
 struct SimpleResolver {
     limiter: Arc<Semaphore>,
@@ -61,12 +61,8 @@ impl Resolver<GlobalConfig> for SimpleResolver {
             serde_json::from_slice(bytes).map_err(Into::into)
         }
 
-        let local_path = self.dirs.locate(&input);
-        println!("will be placed at {}", local_path.display());
         let artifact: Arc<dyn ErasedArtifact<GlobalConfig>> = match &input {
             Source::Remote { url, kind, .. } => {
-                let _ = self.limiter.acquire().await;
-
                 let data = reqwest::get(url.as_str())
                     .and_then(Response::bytes)
                     .map_err(io::Error::other)
@@ -86,12 +82,10 @@ impl Resolver<GlobalConfig> for SimpleResolver {
             Source::Archive { zipped, index } => {
                 let mut archive = zipped.archive.clone();
                 let mut file = archive.by_index(*index).map_err(io::Error::from)?;
-                let mut buf = vec![0u8; file.size() as usize];
+                let mut buf = BytesMut::zeroed(file.size() as usize);
                 file.read_exact(&mut buf)?;
 
-                Arc::new(JustFile {
-                    data: Bytes::from(buf),
-                })
+                Arc::new(JustFile { data: buf.freeze() })
             }
         };
 
@@ -99,7 +93,7 @@ impl Resolver<GlobalConfig> for SimpleResolver {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() {
     let global_config = GlobalConfig {
         resources: Url::parse(RESOURCES_URL).unwrap(),
@@ -108,21 +102,25 @@ async fn main() {
     let resolver = SimpleResolver {
         limiter: Arc::new(Semaphore::new(10)),
         dirs: Dirs {
-            root: "/".into(),
-            assets: "/assets".into(),
-            libraries: "/libraries".into(),
-            versions: "/versions".into(),
-            runtime: "/runtime".into(),
+            root: "./test_mc/".into(),
+            assets: "./test_mc/assets".into(),
+            libraries: "./test_mc/libraries".into(),
+            versions: "./test_mc/versions".into(),
+            runtime: "./test_mc/runtime".into(),
         },
     };
 
     let root = Source::Remote {
-        url: Arc::new(Url::parse(MANIFEST_URL).unwrap()),
-        name: Arc::from("manifest"),
-        kind: SourceKind::VersionManifest,
+        url: Arc::new(Url::parse(VERSION_INFO_URL).unwrap()),
+        name: Arc::from("1.7.10"),
+        kind: SourceKind::VersionInfo,
         hash: None,
         size: None,
     };
+    save(&resolver, &global_config, root).await;
+}
+
+async fn save(resolver: &SimpleResolver, global_config: &GlobalConfig, root: Source) {
     let mut tasks = FuturesUnordered::new();
     tasks.push(resolver.resolve(root));
 
@@ -131,7 +129,14 @@ async fn main() {
             continue;
         };
 
-        for next in resolved.artifact.provides(&global_config) {
+        let _ = resolver.limiter.acquire().await;
+        let local_path = resolver.dirs.locate(&resolved.input);
+        let data = resolved.artifact.calc_bytes().unwrap();
+        let _ = tokio::fs::create_dir_all(local_path.parent().unwrap()).await;
+        let _ = tokio::fs::write(&local_path, &data).await;
+        println!("saved: {}", local_path.display());
+
+        for next in resolved.artifact.provides(global_config) {
             tasks.push(resolver.resolve(next));
         }
     }

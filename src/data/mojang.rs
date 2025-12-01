@@ -1,25 +1,25 @@
 use std::{collections::HashMap, iter, sync::Arc};
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
-use serde_with::{formats::SpaceSeparator, serde_as, OneOrMany, StringWithSeparator};
+use serde::{Deserialize, Serialize};
+use serde_with::{OneOrMany, StringWithSeparator, formats::SpaceSeparator, serde_as};
 use url::Url;
 
 pub use sha1_smol::Digest as Sha1Hash;
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct VersionManifest {
     pub latest: Latest,
     pub versions: Vec<Version>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Latest {
     pub release: Arc<str>,
     pub snapshot: Arc<str>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Version {
     pub id: Arc<str>,
@@ -30,7 +30,7 @@ pub struct Version {
     pub release_time: DateTime<Utc>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum VersionKind {
     Release,
@@ -39,7 +39,7 @@ pub enum VersionKind {
     OldBeta,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct VersionInfo {
     pub id: Arc<str>,
@@ -61,7 +61,7 @@ pub struct VersionInfo {
     pub compliance_level: Option<u64>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetIndexResource {
     #[serde(flatten)]
@@ -70,26 +70,26 @@ pub struct AssetIndexResource {
     pub total_size: u64,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct AssetIndex {
     #[serde(default)]
     pub map_to_resources: bool,
     pub objects: HashMap<Arc<str>, AssetMetadata>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct AssetMetadata {
     pub hash: Sha1Hash,
     pub size: u64,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Downloads {
     pub client: Resource,
     pub server: Option<Resource>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Library {
     #[serde(rename = "downloads")]
     pub resources: LibraryResources,
@@ -101,28 +101,28 @@ pub struct Library {
     pub rules: Rules,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct LibraryResources {
     pub artifact: Option<LibraryResource>,
     #[serde(default, rename = "classifiers")]
     pub extra: HashMap<String, LibraryResource>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct LibraryResource {
     #[serde(flatten)]
     pub resource: Resource,
     pub path: Option<Arc<str>>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct LibraryExtract {
     #[serde(default)]
     pub exclude: Vec<Arc<str>>,
 }
 
 #[serde_as]
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum Arguments {
     #[serde(rename = "arguments")]
     Modern {
@@ -136,7 +136,7 @@ pub enum Arguments {
 }
 
 #[serde_as]
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
 pub enum Argument {
     Plain(String),
@@ -148,19 +148,19 @@ pub enum Argument {
     },
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct JavaVersion {
     pub component: String,
     pub major_version: u32,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Logging {
     pub client: LoggerDescription,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct LoggerDescription {
     pub argument: String,
     #[serde(rename = "type")]
@@ -169,26 +169,26 @@ pub struct LoggerDescription {
     pub config: LoggerConfig,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct LoggerConfig {
     #[serde(flatten)]
     pub resource: Resource,
     pub id: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct JvmManifest {
     #[serde(flatten, default)]
     pub platforms: HashMap<Arc<str>, JvmPlatform>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct JvmPlatform {
     #[serde(flatten, default)]
     pub resources: HashMap<Arc<str>, Vec<JvmResource>>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct JvmResource {
     pub availability: JvmAvailability,
     #[serde(rename = "manifest")]
@@ -196,25 +196,25 @@ pub struct JvmResource {
     pub version: JvmVersion,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct JvmAvailability {
     pub group: u32,
     pub progress: u32,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct JvmVersion {
     pub name: Arc<str>,
     pub released: DateTime<Utc>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct JvmInfo {
     #[serde(rename = "files")]
     pub content: HashMap<Arc<str>, JvmContent>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 #[serde(rename_all = "camelCase")]
 pub enum JvmContent {
@@ -223,19 +223,19 @@ pub enum JvmContent {
     Directory,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct JvmFile {
     pub downloads: JvmFileDownloads,
     pub executable: bool,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct JvmFileDownloads {
     pub lzma: Option<Resource>,
     pub raw: Resource,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Resource {
     #[serde(rename = "sha1")]
     pub hash: Sha1Hash,
@@ -243,10 +243,10 @@ pub struct Resource {
     pub url: Arc<Url>,
 }
 
-#[derive(Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Rules(Vec<Rule>);
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Rule {
     pub action: RuleAction,
     #[serde(default)]
@@ -255,14 +255,14 @@ pub struct Rule {
     pub features: HashMap<String, bool>,
 }
 
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum RuleAction {
     Allow,
     Disallow,
 }
 
-#[derive(Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct OsDescription {
     pub name: Option<String>,
     pub version: Option<String>,
