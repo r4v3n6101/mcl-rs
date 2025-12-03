@@ -118,7 +118,7 @@ pub struct LibraryResource {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LibraryExtract {
     #[serde(default)]
-    pub exclude: Vec<Arc<str>>,
+    pub exclude: Arc<[Arc<str>]>,
 }
 
 #[serde_as]

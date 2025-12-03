@@ -9,7 +9,7 @@ use futures::{StreamExt, TryFutureExt, stream::FuturesUnordered};
 use mcl_rs::{
     data::{
         Source, SourceKind,
-        config::{AssetIndexConfig, VersionInfoConfig},
+        config::{AssetIndexConfig, OsSelector, VersionInfoConfig},
         mojang::{AssetIndex, VersionInfo, VersionManifest},
         other::{JustFile, ZippedFile},
     },
@@ -33,6 +33,7 @@ struct SimpleResolver {
 struct GlobalConfig {
     resources: Url,
     params: HashMap<&'static str, bool>,
+    os_selector: OsSelector,
 }
 
 impl From<&GlobalConfig> for () {
@@ -51,6 +52,7 @@ impl<'a> From<&'a GlobalConfig> for VersionInfoConfig<'a> {
     fn from(value: &'a GlobalConfig) -> Self {
         Self {
             params: &value.params,
+            os_selector: value.os_selector,
         }
     }
 }
@@ -61,8 +63,12 @@ impl Resolver<GlobalConfig> for SimpleResolver {
             serde_json::from_slice(bytes).map_err(Into::into)
         }
 
-        let artifact: Arc<dyn ErasedArtifact<GlobalConfig>> = match &input {
-            Source::Remote { url, kind, .. } => {
+        let _permit = self.limiter.acquire().await;
+
+        let artifact: Arc<dyn ErasedArtifact<GlobalConfig>> = match input {
+            Source::Remote {
+                ref url, ref kind, ..
+            } => {
                 let data = reqwest::get(url.as_str())
                     .and_then(Response::bytes)
                     .map_err(io::Error::other)
@@ -79,11 +85,17 @@ impl Resolver<GlobalConfig> for SimpleResolver {
                     _ => Arc::new(JustFile { data }),
                 }
             }
-            Source::Archive { zipped, index } => {
+            Source::Archive { ref zipped, index } => {
                 let mut archive = zipped.archive.clone();
-                let mut file = archive.by_index(*index).map_err(io::Error::from)?;
-                let mut buf = BytesMut::zeroed(file.size() as usize);
-                file.read_exact(&mut buf)?;
+                let buf = tokio::task::spawn_blocking(move || {
+                    let mut file = archive.by_index(index).map_err(io::Error::from).unwrap();
+                    let mut buf = BytesMut::zeroed(file.size() as usize);
+                    let _ = file.read_exact(&mut buf);
+
+                    buf
+                })
+                .await
+                .unwrap();
 
                 Arc::new(JustFile { data: buf.freeze() })
             }
@@ -97,6 +109,7 @@ impl Resolver<GlobalConfig> for SimpleResolver {
 async fn main() {
     let global_config = GlobalConfig {
         resources: Url::parse(RESOURCES_URL).unwrap(),
+        os_selector: OsSelector::all(),
         params: Default::default(),
     };
     let resolver = SimpleResolver {
@@ -129,7 +142,6 @@ async fn save(resolver: &SimpleResolver, global_config: &GlobalConfig, root: Sou
             continue;
         };
 
-        let _ = resolver.limiter.acquire().await;
         let local_path = resolver.dirs.locate(&resolved.input);
         let data = resolved.artifact.calc_bytes().unwrap();
         let _ = tokio::fs::create_dir_all(local_path.parent().unwrap()).await;

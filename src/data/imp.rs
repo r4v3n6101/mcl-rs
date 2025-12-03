@@ -1,5 +1,6 @@
-use std::{io, iter, sync::Arc};
+use std::{array, io, iter, sync::Arc};
 
+use bitflags::Flags;
 use bytes::Bytes;
 use serde::Serialize;
 
@@ -7,10 +8,10 @@ use crate::util;
 
 use super::{
     Artifact, GetBytes, Source, SourceKind,
-    config::{AssetIndexConfig, JvmInfoConfig, VersionInfoConfig},
+    config::{AssetIndexConfig, JvmInfoConfig, OsSelector, VersionInfoConfig},
     mojang::{
         AssetIndex, AssetMetadata, JvmContent, JvmInfo, JvmManifest, JvmPlatform, JvmResource,
-        LibraryResource, Resource, VersionInfo, VersionManifest,
+        Library, LibraryResource, Resource, VersionInfo, VersionManifest,
     },
     other::{JustFile, ZippedFile},
 };
@@ -155,7 +156,7 @@ impl Artifact for VersionInfo {
             .libraries
             .iter()
             .filter(|lib| lib.rules.is_allowed(config.params))
-            .flat_map(|lib| {
+            .flat_map(move |lib| {
                 let library = lib.resources.artifact.as_ref().map(
                     |LibraryResource {
                          resource: Resource { hash, size, url },
@@ -174,30 +175,53 @@ impl Artifact for VersionInfo {
                     },
                 );
 
-                // TODO : filter by OS & arch
-                let natives = lib.resources.extra.values().map(
-                    |LibraryResource {
-                         resource: Resource { hash, size, url },
-                         path,
-                     }| {
-                        Source::Remote {
-                            kind: SourceKind::Library { zipped: true },
-                            url: Arc::clone(url),
-                            name: path.as_ref().map_or_else(
-                                || {
-                                    // TODO
-                                    let native_str = None;
-                                    Arc::from(util::build_library_path(&lib.name, hash, native_str))
-                                },
-                                Arc::clone,
-                            ),
-                            hash: Some(*hash),
-                            size: Some(*size),
-                        }
-                    },
-                );
+                let mut natives: [Option<Source>; OsSelector::FLAGS.len()] =
+                    array::from_fn(|_| None);
+                for (i, os) in config.os_selector.iter().enumerate() {
+                    natives[i] = if os == OsSelector::Linux64 {
+                        calc_native_str(lib, "linux", "64")
+                    } else if os == OsSelector::Linux32 {
+                        calc_native_str(lib, "linux", "32")
+                    } else if os == OsSelector::OSX64 {
+                        calc_native_str(lib, "osx", "64")
+                    } else if os == OsSelector::OSX32 {
+                        calc_native_str(lib, "osx", "32")
+                    } else if os == OsSelector::Windows64 {
+                        calc_native_str(lib, "windows", "64")
+                    } else if os == OsSelector::Windows32 {
+                        calc_native_str(lib, "windows", "32")
+                    } else {
+                        unreachable!()
+                    }
+                    .map(
+                        |(
+                            classifier,
+                            LibraryResource {
+                                resource: Resource { hash, size, url },
+                                path,
+                            },
+                        )| {
+                            Source::Remote {
+                                kind: SourceKind::Library { zipped: true },
+                                url: Arc::clone(url),
+                                name: path.as_ref().map_or_else(
+                                    || {
+                                        Arc::from(util::build_library_path(
+                                            &lib.name,
+                                            hash,
+                                            Some(&classifier),
+                                        ))
+                                    },
+                                    Arc::clone,
+                                ),
+                                hash: Some(*hash),
+                                size: Some(*size),
+                            }
+                        },
+                    );
+                }
 
-                natives.chain(library)
+                natives.into_iter().flatten().chain(library)
             });
 
         client_jar
@@ -275,4 +299,24 @@ impl Artifact for JvmInfo {
                 _ => None,
             })
     }
+}
+
+fn calc_native_str<'a>(
+    lib: &'a Library,
+    os_name: &str,
+    bitness: &str,
+) -> Option<(String, &'a LibraryResource)> {
+    lib.natives.get(os_name).and_then(|classifier| {
+        let full_classifier = format!("{classifier}-{bitness}");
+        lib.resources
+            .extra
+            .get(&full_classifier)
+            .map(|res| (full_classifier, res))
+            .or_else(|| {
+                lib.resources
+                    .extra
+                    .get(classifier)
+                    .map(|res| (classifier.clone(), res))
+            })
+    })
 }
