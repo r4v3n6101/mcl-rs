@@ -8,7 +8,7 @@ use bytes::BytesMut;
 use futures::{StreamExt, TryFutureExt, stream::FuturesUnordered};
 use mcl_rs::{
     data::{
-        Source, SourceKind,
+        ArchivedSource, RemoteSource, Source, SourceKind,
         config::{AssetIndexConfig, OsSelector, VersionInfoConfig},
         mojang::{AssetIndex, VersionInfo, VersionManifest},
         other::{JustFile, ZippedFile},
@@ -66,26 +66,25 @@ impl Resolver<GlobalConfig> for SimpleResolver {
         let _permit = self.limiter.acquire().await;
 
         let artifact: Arc<dyn ErasedArtifact<GlobalConfig>> = match input {
-            Source::Remote {
-                ref url, ref kind, ..
-            } => {
-                let data = reqwest::get(url.as_str())
+            Source::Remote(ref remote) => {
+                let data = reqwest::get(remote.url.as_str())
                     .and_then(Response::bytes)
                     .map_err(io::Error::other)
                     .await?;
 
-                match &kind {
+                match &remote.kind {
                     SourceKind::VersionManifest => Arc::new(decode_json::<VersionManifest>(&data)?),
                     SourceKind::VersionInfo => Arc::new(decode_json::<VersionInfo>(&data)?),
                     SourceKind::AssetIndex => Arc::new(decode_json::<AssetIndex>(&data)?),
-                    SourceKind::Library { zipped: true } => Arc::new(ZippedFile {
-                        source: Arc::new(input.clone()),
+                    SourceKind::ZippedLibrary { exclude } => Arc::new(ZippedFile {
+                        source: remote.clone(),
+                        exclude: Arc::clone(exclude),
                         archive: ZipArchive::new(Cursor::new(data)).map_err(io::Error::other)?,
                     }),
                     _ => Arc::new(JustFile { data }),
                 }
             }
-            Source::Archive { ref zipped, index } => {
+            Source::Archive(ArchivedSource { ref zipped, index }) => {
                 let mut archive = zipped.archive.clone();
                 let buf = tokio::task::spawn_blocking(move || {
                     let mut file = archive.by_index(index).map_err(io::Error::from).unwrap();
@@ -123,13 +122,13 @@ async fn main() {
         },
     };
 
-    let root = Source::Remote {
+    let root = Source::Remote(RemoteSource {
         url: Arc::new(Url::parse(VERSION_INFO_URL).unwrap()),
         name: Arc::from("1.7.10"),
         kind: SourceKind::VersionInfo,
         hash: None,
         size: None,
-    };
+    });
     save(&resolver, &global_config, root).await;
 }
 

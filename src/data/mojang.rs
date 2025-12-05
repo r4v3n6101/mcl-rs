@@ -96,7 +96,8 @@ pub struct Library {
     pub name: Arc<str>,
     #[serde(default)]
     pub natives: HashMap<String, String>,
-    pub extract: Option<LibraryExtract>,
+    #[serde(default)]
+    pub extract: LibraryExtract,
     #[serde(default)]
     pub rules: Rules,
 }
@@ -115,7 +116,7 @@ pub struct LibraryResource {
     pub path: Option<Arc<str>>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct LibraryExtract {
     #[serde(default)]
     pub exclude: Arc<[Arc<str>]>,

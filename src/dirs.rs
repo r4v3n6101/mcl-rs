@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::data::{Source, SourceKind};
+use crate::data::{ArchivedSource, RemoteSource, Source, SourceKind};
 
 #[derive(Debug, Clone)]
 pub struct Dirs {
@@ -14,7 +14,7 @@ pub struct Dirs {
 impl Dirs {
     pub fn locate(&self, src: &Source) -> PathBuf {
         match src {
-            Source::Remote { name, kind, .. } => match &kind {
+            Source::Remote(RemoteSource { kind, name, .. }) => match &kind {
                 SourceKind::VersionManifest => build_path(self.root.clone(), [name], None, "json"),
                 SourceKind::AssetIndex => {
                     build_path(self.assets.clone(), ["indexes", name], None, "json")
@@ -25,7 +25,7 @@ impl Dirs {
                 SourceKind::Asset { legacy: true } => {
                     build_path(self.assets.clone(), ["legacy", name], None, None)
                 }
-                SourceKind::Library { .. } => {
+                SourceKind::Library | SourceKind::ZippedLibrary { .. } => {
                     build_path(self.libraries.clone(), [name], None, None)
                 }
                 SourceKind::ClientJar => {
@@ -57,18 +57,12 @@ impl Dirs {
                     None,
                 ),
             },
-            Source::Archive { zipped, index } => {
-                let src @ Source::Remote { .. } = &*zipped.source else {
-                    // TODO
-                    panic!("nested archives not supported");
-                };
-
-                let path = self.locate(src);
+            Source::Archive(ArchivedSource { zipped, index }) => {
+                let path = self.locate(&Source::Remote(zipped.source.clone()));
                 let name = zipped
                     .archive
                     .name_for_index(*index)
-                    .map(ToString::to_string)
-                    .unwrap_or(format!("unnamed{index}"));
+                    .expect("path without names must be excluded");
 
                 path.parent().unwrap().join(name)
             }

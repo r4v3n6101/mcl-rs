@@ -34,18 +34,24 @@ pub trait GetBytes {
 }
 
 #[derive(Debug, Clone)]
+pub struct RemoteSource {
+    pub url: Arc<Url>,
+    pub name: Arc<str>,
+    pub kind: SourceKind,
+    pub hash: Option<Sha1Hash>,
+    pub size: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArchivedSource {
+    pub zipped: ZippedFile,
+    pub index: usize,
+}
+
+#[derive(Debug, Clone)]
 pub enum Source {
-    Remote {
-        url: Arc<Url>,
-        name: Arc<str>,
-        kind: SourceKind,
-        hash: Option<Sha1Hash>,
-        size: Option<u64>,
-    },
-    Archive {
-        zipped: ZippedFile,
-        index: usize,
-    },
+    Remote(RemoteSource),
+    Archive(ArchivedSource),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -55,8 +61,9 @@ pub enum SourceKind {
     VersionInfo,
     ClientJar,
     ServerJar,
-    Library {
-        zipped: bool,
+    Library,
+    ZippedLibrary {
+        exclude: Arc<[Arc<str>]>,
     },
     AssetIndex,
     Asset {
