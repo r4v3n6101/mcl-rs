@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::data::{ArchivedSource, RemoteSource, Source, SourceKind};
+use crate::data::{ArchiveKind, Source, SourceKind};
 
 #[derive(Debug, Clone)]
 pub struct Dirs {
@@ -14,7 +14,7 @@ pub struct Dirs {
 impl Dirs {
     pub fn locate(&self, src: &Source) -> PathBuf {
         match src {
-            Source::Remote(RemoteSource { kind, name, .. }) => match &kind {
+            Source::Remote { kind, name, .. } => match &kind {
                 SourceKind::VersionManifest => build_path(self.root.clone(), [name], None, "json"),
                 SourceKind::AssetIndex => {
                     build_path(self.assets.clone(), ["indexes", name], None, "json")
@@ -25,7 +25,7 @@ impl Dirs {
                 SourceKind::Asset { legacy: true } => {
                     build_path(self.assets.clone(), ["legacy", name], None, None)
                 }
-                SourceKind::Library | SourceKind::ZippedLibrary { .. } => {
+                SourceKind::Library | SourceKind::ZippedNatives { .. } => {
                     build_path(self.libraries.clone(), [name], None, None)
                 }
                 SourceKind::ClientJar => {
@@ -57,15 +57,15 @@ impl Dirs {
                     None,
                 ),
             },
-            Source::Archive(ArchivedSource { zipped, index }) => {
-                let path = self.locate(&Source::Remote(zipped.source.clone()));
-                let name = zipped
-                    .archive
-                    .name_for_index(*index)
-                    .expect("path without names must be excluded");
-
-                path.parent().unwrap().join(name)
-            }
+            Source::Archive {
+                entry,
+                kind: ArchiveKind::Natives { classifier },
+            } => build_path(
+                self.versions.clone(),
+                [classifier, "natives", entry.get().name],
+                None,
+                None,
+            ),
         }
     }
 }

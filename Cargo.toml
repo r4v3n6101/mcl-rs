@@ -14,6 +14,8 @@ serde_json = "1"
 serde_with = "3.12"
 zip = "6.0.0"
 sha1_smol = { version = "1.0.1", features = ["serde"] }
+yoke = "0.8.1"
+stable_deref_trait = "1.2.1"
 
 [dev-dependencies]
 futures = "0.3.31"

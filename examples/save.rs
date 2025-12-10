@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    io::{self, Cursor, Read},
+    io::{self, Read},
     sync::Arc,
 };
 
@@ -8,10 +8,10 @@ use bytes::BytesMut;
 use futures::{StreamExt, TryFutureExt, stream::FuturesUnordered};
 use mcl_rs::{
     data::{
-        ArchivedSource, RemoteSource, Source, SourceKind,
+        Source, SourceKind,
         config::{AssetIndexConfig, OsSelector, VersionInfoConfig},
         mojang::{AssetIndex, VersionInfo, VersionManifest},
-        other::{JustFile, ZippedFile},
+        other::{JustFile, SharedZipArchive, ZippedNatives},
     },
     dirs::Dirs,
     resolver::{ErasedArtifact, ResolvedArtifact, ResolvedResult, Resolver},
@@ -66,35 +66,43 @@ impl Resolver<GlobalConfig> for SimpleResolver {
         let _permit = self.limiter.acquire().await;
 
         let artifact: Arc<dyn ErasedArtifact<GlobalConfig>> = match input {
-            Source::Remote(ref remote) => {
-                let data = reqwest::get(remote.url.as_str())
+            Source::Remote {
+                ref url, ref kind, ..
+            } => {
+                let data = reqwest::get(url.as_str())
                     .and_then(Response::bytes)
                     .map_err(io::Error::other)
                     .await?;
 
-                match &remote.kind {
+                match &kind {
                     SourceKind::VersionManifest => Arc::new(decode_json::<VersionManifest>(&data)?),
                     SourceKind::VersionInfo => Arc::new(decode_json::<VersionInfo>(&data)?),
                     SourceKind::AssetIndex => Arc::new(decode_json::<AssetIndex>(&data)?),
-                    SourceKind::ZippedLibrary { exclude } => Arc::new(ZippedFile {
-                        source: remote.clone(),
+                    SourceKind::ZippedNatives {
+                        classifier,
+                        exclude,
+                    } => Arc::new(ZippedNatives {
+                        archive: SharedZipArchive::new(data).map_err(io::Error::other)?,
                         exclude: Arc::clone(exclude),
-                        archive: ZipArchive::new(Cursor::new(data)).map_err(io::Error::other)?,
+                        classifier: Arc::clone(classifier),
                     }),
                     _ => Arc::new(JustFile { data }),
                 }
             }
-            Source::Archive(ArchivedSource { ref zipped, index }) => {
-                let mut archive = zipped.archive.clone();
+            Source::Archive { ref entry, .. } => {
+                let entry = entry.clone();
                 let buf = tokio::task::spawn_blocking(move || {
-                    let mut file = archive.by_index(index).map_err(io::Error::from).unwrap();
+                    let name = entry.get().name;
+                    let mut archive = ZipArchive::clone(entry.backing_cart());
+                    let mut file = archive.by_name(name).map_err(io::Error::other)?;
                     let mut buf = BytesMut::zeroed(file.size() as usize);
                     let _ = file.read_exact(&mut buf);
 
-                    buf
+                    Ok(buf)
                 })
                 .await
-                .unwrap();
+                .map_err(io::Error::other)
+                .flatten()?;
 
                 Arc::new(JustFile { data: buf.freeze() })
             }
@@ -122,13 +130,13 @@ async fn main() {
         },
     };
 
-    let root = Source::Remote(RemoteSource {
+    let root = Source::Remote {
         url: Arc::new(Url::parse(VERSION_INFO_URL).unwrap()),
         name: Arc::from("1.7.10"),
         kind: SourceKind::VersionInfo,
         hash: None,
         size: None,
-    });
+    };
     save(&resolver, &global_config, root).await;
 }
 

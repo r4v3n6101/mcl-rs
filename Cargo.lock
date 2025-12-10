@@ -930,9 +930,11 @@ dependencies = [
  "serde_json",
  "serde_with",
  "sha1_smol",
+ "stable_deref_trait",
  "thiserror",
  "tokio",
  "url",
+ "yoke",
  "zip",
 ]
 

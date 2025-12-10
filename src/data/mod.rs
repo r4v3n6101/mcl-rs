@@ -2,8 +2,11 @@ use std::{io, sync::Arc};
 
 use bytes::Bytes;
 use url::Url;
+use yoke::Yoke;
 
-use crate::data::{mojang::Sha1Hash, other::ZippedFile};
+use crate::data::other::{SharedZipArchive, ZipEntry};
+
+use self::mojang::Sha1Hash;
 
 pub mod config;
 pub mod mojang;
@@ -33,25 +36,21 @@ pub trait GetBytes {
     fn calc_bytes(&self) -> io::Result<Bytes>;
 }
 
-#[derive(Debug, Clone)]
-pub struct RemoteSource {
-    pub url: Arc<Url>,
-    pub name: Arc<str>,
-    pub kind: SourceKind,
-    pub hash: Option<Sha1Hash>,
-    pub size: Option<u64>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ArchivedSource {
-    pub zipped: ZippedFile,
-    pub index: usize,
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Source {
-    Remote(RemoteSource),
-    Archive(ArchivedSource),
+    Remote {
+        url: Arc<Url>,
+        name: Arc<str>,
+        kind: SourceKind,
+        hash: Option<Sha1Hash>,
+        size: Option<u64>,
+    },
+    Archive {
+        /// Entry attached to its archive.
+        entry: Yoke<ZipEntry<'static>, SharedZipArchive>,
+        /// Kind of archive.
+        kind: ArchiveKind,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -62,7 +61,8 @@ pub enum SourceKind {
     ClientJar,
     ServerJar,
     Library,
-    ZippedLibrary {
+    ZippedNatives {
+        classifier: Arc<str>,
         exclude: Arc<[Arc<str>]>,
     },
     AssetIndex,
@@ -78,5 +78,13 @@ pub enum SourceKind {
         jvm_mojang_name: Arc<str>,
         executable: bool,
         compressed: bool,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum ArchiveKind {
+    Natives {
+        /// Classifier for unpacking natives into dir.
+        classifier: Arc<str>,
     },
 }

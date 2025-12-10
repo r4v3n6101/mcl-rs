@@ -3,17 +3,18 @@ use std::{array, io, iter, sync::Arc};
 use bitflags::Flags;
 use bytes::Bytes;
 use serde::Serialize;
+use yoke::Yoke;
 
 use crate::util;
 
 use super::{
-    ArchivedSource, Artifact, GetBytes, RemoteSource, Source, SourceKind,
+    ArchiveKind, Artifact, GetBytes, Source, SourceKind,
     config::{AssetIndexConfig, JvmInfoConfig, OsSelector, VersionInfoConfig},
     mojang::{
         AssetIndex, AssetMetadata, JvmContent, JvmInfo, JvmManifest, JvmPlatform, JvmResource,
         Library, LibraryResource, Resource, VersionInfo, VersionManifest,
     },
-    other::{JustFile, ZippedFile},
+    other::{JustFile, ZipEntry, ZippedNatives},
 };
 
 impl<T> GetBytes for T
@@ -31,9 +32,9 @@ impl GetBytes for JustFile {
     }
 }
 
-impl GetBytes for ZippedFile {
+impl GetBytes for ZippedNatives {
     fn calc_bytes(&self) -> io::Result<Bytes> {
-        Ok(self.archive.clone().into_inner().get_ref().clone())
+        Ok(self.archive.get_data())
     }
 }
 
@@ -48,7 +49,7 @@ impl Artifact for JustFile {
     }
 }
 
-impl Artifact for ZippedFile {
+impl Artifact for ZippedNatives {
     type Config<'this> = ();
 
     fn provides<'this>(
@@ -56,19 +57,29 @@ impl Artifact for ZippedFile {
         (): Self::Config<'this>,
     ) -> impl Iterator<Item = Source> + 'this {
         (0..self.archive.len()).filter_map(|i| {
-            let name = self.archive.name_for_index(i)?;
+            // NB: I want try_ returns T: Try
+            let entry =
+                Yoke::<ZipEntry<'static>, _>::try_attach_to_cart(self.archive.clone(), |archive| {
+                    Ok::<_, ()>(ZipEntry {
+                        name: archive.name_for_index(i).ok_or(())?,
+                    })
+                })
+                .ok()?;
+
             if self
                 .exclude
                 .iter()
-                .any(|exclude| name.starts_with(&**exclude))
+                .any(|exclude| entry.get().name.starts_with(&**exclude))
             {
                 return None;
             }
 
-            Some(Source::Archive(ArchivedSource {
-                zipped: self.clone(),
-                index: i,
-            }))
+            Some(Source::Archive {
+                entry,
+                kind: ArchiveKind::Natives {
+                    classifier: Arc::clone(&self.classifier),
+                },
+            })
         })
     }
 }
@@ -81,14 +92,12 @@ impl Artifact for VersionManifest {
         &'this self,
         (): Self::Config<'this>,
     ) -> impl Iterator<Item = Source> + 'this {
-        self.versions.iter().map(|version| {
-            Source::Remote(RemoteSource {
-                url: Arc::clone(&version.url),
-                name: Arc::clone(&version.id),
-                kind: SourceKind::VersionInfo,
-                hash: None,
-                size: None,
-            })
+        self.versions.iter().map(|version| Source::Remote {
+            url: Arc::clone(&version.url),
+            name: Arc::clone(&version.id),
+            kind: SourceKind::VersionInfo,
+            hash: None,
+            size: None,
         })
     }
 }
@@ -107,7 +116,7 @@ impl Artifact for AssetIndex {
                     let hash = hash.to_string();
                     format!("{}/{}", &hash[..2], &hash)
                 };
-                Source::Remote(RemoteSource {
+                Source::Remote {
                     kind: SourceKind::Asset {
                         legacy: self.map_to_resources,
                     },
@@ -124,7 +133,7 @@ impl Artifact for AssetIndex {
                     },
                     hash: Some(*hash),
                     size: Some(*size),
-                })
+                }
             })
     }
 }
@@ -136,34 +145,32 @@ impl Artifact for VersionInfo {
         &'this self,
         config: Self::Config<'this>,
     ) -> impl Iterator<Item = Source> + 'this {
-        let asset_index = iter::once(Source::Remote(RemoteSource {
+        let asset_index = iter::once(Source::Remote {
             kind: SourceKind::AssetIndex,
             url: Arc::clone(&self.asset_index.resource.url),
             name: Arc::clone(&self.asset_index.id),
             hash: Some(self.asset_index.resource.hash),
             size: Some(self.asset_index.resource.size),
-        }));
+        });
 
-        let client_jar = iter::once(Source::Remote(RemoteSource {
+        let client_jar = iter::once(Source::Remote {
             kind: SourceKind::ClientJar,
             url: Arc::clone(&self.downloads.client.url),
             name: Arc::clone(&self.id),
             hash: Some(self.downloads.client.hash),
             size: Some(self.downloads.client.size),
-        }));
+        });
 
         let server_jar = self
             .downloads
             .server
             .as_ref()
-            .map(|Resource { hash, size, url }| {
-                Source::Remote(RemoteSource {
-                    kind: SourceKind::ServerJar,
-                    url: Arc::clone(url),
-                    name: Arc::clone(&self.id),
-                    hash: Some(*hash),
-                    size: Some(*size),
-                })
+            .map(|Resource { hash, size, url }| Source::Remote {
+                kind: SourceKind::ServerJar,
+                url: Arc::clone(url),
+                name: Arc::clone(&self.id),
+                hash: Some(*hash),
+                size: Some(*size),
             });
 
         let libraries = self
@@ -176,7 +183,7 @@ impl Artifact for VersionInfo {
                          resource: Resource { hash, size, url },
                          path,
                      }| {
-                        Source::Remote(RemoteSource {
+                        Source::Remote {
                             kind: SourceKind::Library,
                             url: Arc::clone(url),
                             name: path.as_ref().map_or_else(
@@ -185,7 +192,7 @@ impl Artifact for VersionInfo {
                             ),
                             hash: Some(*hash),
                             size: Some(*size),
-                        })
+                        }
                     },
                 );
 
@@ -215,8 +222,9 @@ impl Artifact for VersionInfo {
                                 path,
                             },
                         )| {
-                            Source::Remote(RemoteSource {
-                                kind: SourceKind::ZippedLibrary {
+                            Source::Remote {
+                                kind: SourceKind::ZippedNatives {
+                                    classifier: Arc::clone(&self.id),
                                     exclude: Arc::clone(&lib.extract.exclude),
                                 },
                                 url: Arc::clone(url),
@@ -232,7 +240,7 @@ impl Artifact for VersionInfo {
                                 ),
                                 hash: Some(*hash),
                                 size: Some(*size),
-                            })
+                            }
                         },
                     );
                 }
@@ -264,7 +272,7 @@ impl Artifact for JvmManifest {
                              version,
                              ..
                          }| {
-                            Source::Remote(RemoteSource {
+                            Source::Remote {
                                 kind: SourceKind::JvmInfo {
                                     platform: Arc::clone(platform),
                                     jvm_mojang_name: Arc::clone(jvm_mojang_name),
@@ -273,7 +281,7 @@ impl Artifact for JvmManifest {
                                 name: Arc::clone(&version.name),
                                 hash: Some(*hash),
                                 size: Some(*size),
-                            })
+                            }
                         },
                     )
                 })
@@ -299,7 +307,7 @@ impl Artifact for JvmInfo {
                         .filter(|_| config.prefer_compressed)
                         .map_or((&file.downloads.raw, false), |res| (res, true));
 
-                    Some(Source::Remote(RemoteSource {
+                    Some(Source::Remote {
                         kind: SourceKind::JvmFile {
                             jvm_mojang_name: Arc::clone(&config.jvm_mojang_name),
                             platform: Arc::clone(&config.platform),
@@ -310,7 +318,7 @@ impl Artifact for JvmInfo {
                         name: Arc::clone(path),
                         hash: Some(*hash),
                         size: Some(*size),
-                    }))
+                    })
                 }
                 _ => None,
             })
