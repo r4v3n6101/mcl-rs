@@ -1,4 +1,4 @@
-use std::{array, io, iter, sync::Arc};
+use std::{array, borrow::Cow, io, iter, sync::Arc};
 
 use bitflags::Flags;
 use bytes::Bytes;
@@ -329,18 +329,13 @@ fn calc_native_str<'a>(
     lib: &'a Library,
     os_name: &str,
     bitness: &str,
-) -> Option<(String, &'a LibraryResource)> {
+) -> Option<(Cow<'a, str>, &'a LibraryResource)> {
     lib.natives.get(os_name).and_then(|classifier| {
-        let full_classifier = format!("{classifier}-{bitness}");
+        let params = iter::once(("arch", bitness)).collect();
+        let full_classifier = util::substitute_params(classifier, &params);
         lib.resources
             .extra
-            .get(&full_classifier)
+            .get(full_classifier.as_ref())
             .map(|res| (full_classifier, res))
-            .or_else(|| {
-                lib.resources
-                    .extra
-                    .get(classifier)
-                    .map(|res| (classifier.clone(), res))
-            })
     })
 }

@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::BTreeMap, fmt::Display, path::PathBuf};
+use std::{borrow::Cow, collections::HashMap, fmt::Display, path::PathBuf};
 
 pub fn build_library_path(name: &str, hash: &impl Display, native_str: Option<&str>) -> String {
     let mut parts = name.splitn(3, ':');
@@ -35,7 +35,7 @@ pub fn build_jvm_path(jvm_name: &str, os_str: &str, path: &str) -> String {
     path_buf.to_string_lossy().into_owned()
 }
 
-pub fn substitute_params<'a>(template: &'a str, params: &BTreeMap<&str, &str>) -> Cow<'a, str> {
+pub fn substitute_params<'a>(template: &'a str, params: &HashMap<&str, &str>) -> Cow<'a, str> {
     let mut output: Option<String> = None;
     let mut start = 0;
 
@@ -79,8 +79,8 @@ pub fn substitute_params<'a>(template: &'a str, params: &BTreeMap<&str, &str>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::borrow::Cow;
-    use std::collections::BTreeMap;
+
+    use std::{borrow::Cow, collections::HashMap};
 
     #[test]
     fn test_valid_library_path() {
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn test_basic_replacement() {
-        let mut params = BTreeMap::new();
+        let mut params = HashMap::new();
         params.insert("name", "Alice");
         params.insert("age", "30");
 
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn test_no_placeholders() {
-        let params = BTreeMap::new();
+        let params = HashMap::new();
         let template = "No placeholders here.";
         let result = substitute_params(template, &params);
 
@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn test_missing_key() {
-        let mut params = BTreeMap::new();
+        let mut params = HashMap::new();
         params.insert("name", "Alice");
 
         let template = "Hello, ${name}! You are ${age} years old.";
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn test_absent_keys() {
-        let params = BTreeMap::new();
+        let params = HashMap::new();
 
         let template = "${hello}, ${world}${exclamation mark}";
         let result = substitute_params(template, &params);
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_multiple_occurrences() {
-        let mut params = BTreeMap::new();
+        let mut params = HashMap::new();
         params.insert("word", "Rust");
 
         let template = "${word} is great! ${word} is powerful!";
@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn test_adjacent_placeholders() {
-        let mut params = BTreeMap::new();
+        let mut params = HashMap::new();
         params.insert("first", "Hello");
         params.insert("second", "World");
 
@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn test_unclosed_placeholder() {
-        let mut params = BTreeMap::new();
+        let mut params = HashMap::new();
         params.insert("name", "Alice");
 
         let template = "Hello, ${name! You are 30.";
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn test_placeholder_same_as_value() {
-        let mut params = BTreeMap::new();
+        let mut params = HashMap::new();
         params.insert("key", "${key}");
 
         let template = "This is a ${key}.";
@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_empty_template() {
-        let params = BTreeMap::new();
+        let params = HashMap::new();
         let template = "";
         let result = substitute_params(template, &params);
 
@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn test_empty_placeholder_value() {
-        let mut params = BTreeMap::new();
+        let mut params = HashMap::new();
         params.insert("empty", "");
 
         let template = "This is ${empty}!";
