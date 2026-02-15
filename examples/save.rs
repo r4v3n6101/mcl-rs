@@ -9,8 +9,8 @@ use futures::{StreamExt, TryFutureExt, stream::FuturesUnordered};
 use mcl_rs::{
     data::{
         Source, SourceKind,
-        config::{AssetIndexConfig, OsSelector, VersionInfoConfig},
-        mojang::{AssetIndex, VersionInfo, VersionManifest},
+        config::{AssetIndexConfig, VersionInfoConfig},
+        mojang::{AssetIndex, OsSelector, VersionInfo, VersionManifest},
         other::{JustFile, SharedZipArchive, ZippedNatives},
     },
     dirs::Dirs,

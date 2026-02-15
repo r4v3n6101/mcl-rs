@@ -1,6 +1,5 @@
 use std::{array, borrow::Cow, io, iter, sync::Arc};
 
-use bitflags::Flags;
 use bytes::Bytes;
 use serde::Serialize;
 use yoke::Yoke;
@@ -9,10 +8,10 @@ use crate::util;
 
 use super::{
     ArchiveKind, Artifact, GetBytes, Source, SourceKind,
-    config::{AssetIndexConfig, JvmInfoConfig, OsSelector, VersionInfoConfig},
+    config::{AssetIndexConfig, JvmInfoConfig, VersionInfoConfig},
     mojang::{
         AssetIndex, AssetMetadata, JvmContent, JvmInfo, JvmManifest, JvmPlatform, JvmResource,
-        Library, LibraryResource, Resource, VersionInfo, VersionManifest,
+        Library, LibraryResource, OsSelector, Resource, VersionInfo, VersionManifest,
     },
     other::{JustFile, ZipEntry, ZippedNatives},
 };
@@ -176,7 +175,7 @@ impl Artifact for VersionInfo {
         let libraries = self
             .libraries
             .iter()
-            .filter(|lib| lib.rules.is_allowed(config.params))
+            .filter(move |lib| lib.rules.is_allowed(config.params, config.os_selector))
             .flat_map(move |lib| {
                 let library = lib.resources.artifact.as_ref().map(
                     |LibraryResource {
@@ -196,53 +195,56 @@ impl Artifact for VersionInfo {
                     },
                 );
 
-                let mut natives: [Option<Source>; OsSelector::FLAGS.len()] =
-                    array::from_fn(|_| None);
-                for (i, os) in config.os_selector.iter().enumerate() {
-                    natives[i] = if os == OsSelector::Linux64 {
-                        calc_native_str(lib, "linux", "64")
-                    } else if os == OsSelector::Linux32 {
-                        calc_native_str(lib, "linux", "32")
-                    } else if os == OsSelector::OSX64 {
-                        calc_native_str(lib, "osx", "64")
-                    } else if os == OsSelector::OSX32 {
-                        calc_native_str(lib, "osx", "32")
-                    } else if os == OsSelector::Windows64 {
-                        calc_native_str(lib, "windows", "64")
-                    } else if os == OsSelector::Windows32 {
-                        calc_native_str(lib, "windows", "32")
-                    } else {
-                        unreachable!()
-                    }
-                    .map(
-                        |(
-                            classifier,
-                            LibraryResource {
-                                resource: Resource { hash, size, url },
-                                path,
-                            },
-                        )| {
-                            Source::Remote {
-                                kind: SourceKind::ZippedNatives {
-                                    classifier: Arc::clone(&self.id),
-                                    exclude: Arc::clone(&lib.extract.exclude),
+                // TODO : move out?
+                let mut natives: [Option<Source>; 6] = array::from_fn(|_| None);
+                let variants = [
+                    (OsSelector::Linux64, "linux", "64"),
+                    (OsSelector::Linux32, "linux", "32"),
+                    (OsSelector::OSX64 | OsSelector::MacOS64, "osx", "64"),
+                    (OsSelector::OSX32 | OsSelector::MacOS32, "osx", "32"),
+                    (
+                        OsSelector::Windows64 | OsSelector::Windows10_64,
+                        "windows",
+                        "64",
+                    ),
+                    (
+                        OsSelector::Windows32 | OsSelector::Windows10_32,
+                        "windows",
+                        "32",
+                    ),
+                ];
+                for (i, (flag, os_name, arch)) in variants.iter().enumerate() {
+                    if config.os_selector.intersects(*flag) {
+                        natives[i] = calc_native_str(lib, os_name, arch).map(
+                            |(
+                                classifier,
+                                LibraryResource {
+                                    resource: Resource { hash, size, url },
+                                    path,
                                 },
-                                url: Arc::clone(url),
-                                name: path.as_ref().map_or_else(
-                                    || {
-                                        Arc::from(util::build_library_path(
-                                            &lib.name,
-                                            hash,
-                                            Some(&classifier),
-                                        ))
+                            )| {
+                                Source::Remote {
+                                    kind: SourceKind::ZippedNatives {
+                                        classifier: Arc::clone(&self.id),
+                                        exclude: Arc::clone(&lib.extract.exclude),
                                     },
-                                    Arc::clone,
-                                ),
-                                hash: Some(*hash),
-                                size: Some(*size),
-                            }
-                        },
-                    );
+                                    url: Arc::clone(url),
+                                    name: path.as_ref().map_or_else(
+                                        || {
+                                            Arc::from(util::build_library_path(
+                                                &lib.name,
+                                                hash,
+                                                Some(&classifier),
+                                            ))
+                                        },
+                                        Arc::clone,
+                                    ),
+                                    hash: Some(*hash),
+                                    size: Some(*size),
+                                }
+                            },
+                        );
+                    }
                 }
 
                 natives.into_iter().flatten().chain(library)

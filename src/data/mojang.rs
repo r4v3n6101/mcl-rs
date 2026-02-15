@@ -1,5 +1,6 @@
 use std::{collections::HashMap, iter, sync::Arc};
 
+use bitflags::bitflags;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_with::{OneOrMany, StringWithSeparator, formats::SpaceSeparator, serde_as};
@@ -270,25 +271,88 @@ pub struct OsDescription {
     pub arch: Option<String>,
 }
 
+bitflags! {
+    #[derive(Copy, Clone, PartialEq, Eq)]
+    pub struct OsSelector: u32 {
+       const Linux32      = 0b0000000001;
+       const Linux64      = 0b0000000010;
+       const Windows32    = 0b0000000100;
+       const Windows64    = 0b0000001000;
+       const Windows10_32 = 0b0000010000;
+       const Windows10_64 = 0b0000100000;
+       const OSX32        = 0b0001000000;
+       const OSX64        = 0b0010000000;
+       const MacOS32      = 0b0100000000;
+       const MacOS64      = 0b1000000000;
+    }
+}
+
 impl Rules {
-    pub fn is_allowed(&self, params: &HashMap<&str, bool>) -> bool {
-        !self.0.iter().any(|rule| !rule.is_allowed(params))
+    pub fn is_allowed(&self, params: &HashMap<&str, bool>, os_selector: OsSelector) -> bool {
+        !self
+            .0
+            .iter()
+            .any(|rule| !rule.is_allowed(params, os_selector))
     }
 }
 
 impl Rule {
-    fn calculate_action(&self, params: &HashMap<&str, bool>) -> RuleAction {
-        // TODO
+    fn calculate_action(
+        &self,
+        params: &HashMap<&str, bool>,
+        os_selector: OsSelector,
+    ) -> RuleAction {
+        let allowed = match (
+            self.os.name.as_deref(),
+            self.os.arch.as_deref(),
+            self.os.version.as_deref(),
+        ) {
+            (Some("linux"), Some("x86"), _) => OsSelector::Linux32,
+            (Some("linux"), _, _) => OsSelector::Linux64 | OsSelector::Linux32,
+
+            (Some("windows"), Some("x86"), Some(version)) if version.starts_with("^10") => {
+                OsSelector::Windows10_32
+            }
+            (Some("windows"), _, Some(version)) if version.starts_with("^10") => {
+                OsSelector::Windows10_64 | OsSelector::Windows10_32
+            }
+            (Some("windows"), Some("x86"), _) => OsSelector::Windows32 | OsSelector::Windows10_32,
+            (Some("windows"), _, _) => {
+                OsSelector::Windows64
+                    | OsSelector::Windows32
+                    | OsSelector::Windows10_64
+                    | OsSelector::Windows10_32
+            }
+
+            (Some("osx"), Some("x86"), Some(version)) if version.starts_with("^10") => {
+                OsSelector::OSX32
+            }
+            (Some("osx"), _, Some(version)) if version.starts_with("^10") => {
+                OsSelector::OSX64 | OsSelector::OSX32
+            }
+            (Some("osx"), Some("x86"), _) => OsSelector::MacOS32 | OsSelector::OSX32,
+            (Some("osx"), _, _) => {
+                OsSelector::MacOS64 | OsSelector::MacOS32 | OsSelector::OSX64 | OsSelector::OSX32
+            }
+
+            _ => OsSelector::all(),
+        };
+
+        if !os_selector.intersects(allowed) {
+            return self.action.invert();
+        }
+
         for (k, v) in &self.features {
             if params.get(k.as_str()).unwrap_or(&false) != v {
                 return self.action.invert();
             }
         }
+
         self.action
     }
 
-    pub fn is_allowed(&self, params: &HashMap<&str, bool>) -> bool {
-        self.calculate_action(params).value()
+    pub fn is_allowed(&self, params: &HashMap<&str, bool>, os: OsSelector) -> bool {
+        self.calculate_action(params, os).value()
     }
 }
 
@@ -312,11 +376,12 @@ impl Arguments {
     pub fn iter_jvm_args<'a>(
         &'a self,
         params: &'a HashMap<&str, bool>,
+        os_selector: OsSelector,
     ) -> Box<dyn Iterator<Item = &'a str> + 'a> {
         match self {
             Self::Modern { jvm, .. } => Box::new(
                 jvm.iter()
-                    .flat_map(|argument| argument.iter_strings(params)),
+                    .flat_map(move |argument| argument.iter_strings(params, os_selector)),
             ),
             Self::Legacy(_) => Box::new(iter::empty()),
         }
@@ -325,11 +390,12 @@ impl Arguments {
     pub fn iter_game_args<'a>(
         &'a self,
         params: &'a HashMap<&str, bool>,
+        os_selector: OsSelector,
     ) -> Box<dyn Iterator<Item = &'a str> + 'a> {
         match self {
             Self::Modern { game, .. } => Box::new(
                 game.iter()
-                    .flat_map(|argument| argument.iter_strings(params)),
+                    .flat_map(move |argument| argument.iter_strings(params, os_selector)),
             ),
             Self::Legacy(s) => Box::new(s.iter().map(String::as_str)),
         }
@@ -340,11 +406,12 @@ impl Argument {
     pub fn iter_strings<'a>(
         &'a self,
         features: &HashMap<&str, bool>,
+        os_selector: OsSelector,
     ) -> Box<dyn Iterator<Item = &'a str> + 'a> {
         match self {
             Self::Plain(s) => Box::new(iter::once(s.as_str())),
             Self::RuleSpecific { value, rules } => {
-                if rules.is_allowed(features) {
+                if rules.is_allowed(features, os_selector) {
                     Box::new(value.iter().map(String::as_str))
                 } else {
                     Box::new(iter::empty())
