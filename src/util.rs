@@ -38,6 +38,7 @@ pub fn build_jvm_path(jvm_name: &str, os_str: &str, path: &str) -> String {
 pub fn substitute_params<'a>(template: &'a str, params: &HashMap<&str, &str>) -> Cow<'a, str> {
     let mut output: Option<String> = None;
     let mut start = 0;
+    let mut emit_start = 0;
 
     while let Some(open) = template[start..].find("${") {
         let open = start + open;
@@ -47,16 +48,21 @@ pub fn substitute_params<'a>(template: &'a str, params: &HashMap<&str, &str>) ->
 
             if let Some(&value) = params.get(key) {
                 if value == &template[open..=close] {
-                    start = close + 1;
-                    continue;
+                    if let Some(out) = &mut output {
+                        out.push_str(&template[emit_start..open]);
+                        out.push_str(&template[open..=close]);
+                        emit_start = close + 1;
+                    }
+                } else {
+                    let out = output.get_or_insert_default();
+                    out.push_str(&template[emit_start..open]);
+                    out.push_str(value);
+                    emit_start = close + 1;
                 }
-
-                let out = output.get_or_insert_default();
-                out.push_str(&template[start..open]);
-                out.push_str(value);
             } else if let Some(out) = &mut output {
-                out.push_str(&template[start..open]);
+                out.push_str(&template[emit_start..open]);
                 out.push_str(&template[open..=close]);
+                emit_start = close + 1;
             } else {
                 start = close + 1;
                 continue;
@@ -69,7 +75,7 @@ pub fn substitute_params<'a>(template: &'a str, params: &HashMap<&str, &str>) ->
     }
 
     if let Some(mut out) = output {
-        out.push_str(&template[start..]);
+        out.push_str(&template[emit_start..]);
         Cow::Owned(out)
     } else {
         Cow::Borrowed(template)
@@ -239,6 +245,31 @@ mod tests {
         let result = substitute_params(template, &params);
 
         assert_eq!(result, "This is !");
+        assert!(matches!(result, Cow::Owned(_)));
+    }
+
+    #[test]
+    fn test_missing_before_replacement() {
+        let mut params = HashMap::new();
+        params.insert("name", "Alice");
+
+        let template = "Hello ${missing} world ${name}!";
+        let result = substitute_params(template, &params);
+
+        assert_eq!(result, "Hello ${missing} world Alice!");
+        assert!(matches!(result, Cow::Owned(_)));
+    }
+
+    #[test]
+    fn test_identity_value_after_replacement() {
+        let mut params = HashMap::new();
+        params.insert("name", "Alice");
+        params.insert("id", "${id}");
+
+        let template = "${name} says ${id}.";
+        let result = substitute_params(template, &params);
+
+        assert_eq!(result, "Alice says ${id}.");
         assert!(matches!(result, Cow::Owned(_)));
     }
 }
