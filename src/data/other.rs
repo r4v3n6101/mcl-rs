@@ -5,17 +5,14 @@ use stable_deref_trait::StableDeref;
 use yoke::{CloneableCart, Yokeable};
 use zip::{ZipArchive, result::ZipResult};
 
-#[derive(Debug, Clone)]
-pub struct JustFile {
-    pub data: Bytes,
-}
+pub struct JustFile;
 
 #[derive(Debug, Clone)]
 pub struct ZippedNatives {
     /// Archive loaded to memory (headers + data).
     pub archive: SharedZipArchive,
     /// Files that should not be extracted.
-    pub exclude: Arc<[Arc<str>]>,
+    pub exclude: Vec<String>,
     // Version of (usually it's version of the game).
     pub classifier: Arc<str>,
 }

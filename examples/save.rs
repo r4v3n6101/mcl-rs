@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     io::{self, Read},
     sync::Arc,
@@ -14,12 +15,12 @@ use mcl_rs::{
         other::{JustFile, SharedZipArchive, ZippedNatives},
     },
     dirs::Dirs,
-    resolver::{ErasedArtifact, ResolvedArtifact, ResolvedResult, Resolver},
+    resolver::{ResolveError, ResolvedArtifact, Resolver},
 };
 use reqwest::Response;
-use serde::de::DeserializeOwned;
 use tokio::sync::Semaphore;
 use url::Url;
+use yoke::Yoke;
 use zip::ZipArchive;
 
 const RESOURCES_URL: &str = "http://resources.download.minecraft.net";
@@ -30,68 +31,83 @@ struct SimpleResolver {
     dirs: Dirs,
 }
 
+#[derive(Clone)]
 struct GlobalConfig {
     resources: Url,
-    params: HashMap<&'static str, bool>,
+    params: HashMap<Cow<'static, str>, bool>,
     os_selector: OsSelector,
 }
 
-impl From<&GlobalConfig> for () {
-    fn from(_: &GlobalConfig) -> Self {}
+impl From<GlobalConfig> for () {
+    fn from(_: GlobalConfig) -> Self {}
 }
 
-impl<'a> From<&'a GlobalConfig> for AssetIndexConfig<'a> {
-    fn from(value: &'a GlobalConfig) -> Self {
+impl From<GlobalConfig> for AssetIndexConfig {
+    fn from(value: GlobalConfig) -> Self {
         Self {
-            origin: &value.resources,
+            origin: value.resources.clone(),
         }
     }
 }
 
-impl<'a> From<&'a GlobalConfig> for VersionInfoConfig<'a> {
-    fn from(value: &'a GlobalConfig) -> Self {
+impl From<GlobalConfig> for VersionInfoConfig {
+    fn from(value: GlobalConfig) -> Self {
         Self {
-            params: &value.params,
+            params: value.params.clone(),
             os_selector: value.os_selector,
         }
     }
 }
 
 impl Resolver<GlobalConfig> for SimpleResolver {
-    async fn resolve(&self, input: Source) -> ResolvedResult<GlobalConfig> {
-        fn decode_json<T: DeserializeOwned>(bytes: &[u8]) -> io::Result<T> {
-            serde_json::from_slice(bytes).map_err(Into::into)
-        }
-
+    async fn resolve(
+        &self,
+        input: Source<'_>,
+    ) -> Result<Yoke<ResolvedArtifact<'static, GlobalConfig>, Arc<[u8]>>, ResolveError> {
         let _permit = self.limiter.acquire().await;
 
-        let artifact: Arc<dyn ErasedArtifact<GlobalConfig>> = match input {
-            Source::Remote {
-                ref url, ref kind, ..
-            } => {
-                let data = reqwest::get(url.as_str())
+        match input {
+            Source::Remote { url, kind, .. } => {
+                let bytes = reqwest::get(url.as_str())
                     .and_then(Response::bytes)
                     .map_err(io::Error::other)
                     .await?;
+                let data = Arc::from(bytes.as_ref());
 
                 match &kind {
-                    SourceKind::VersionManifest => Arc::new(decode_json::<VersionManifest>(&data)?),
-                    SourceKind::VersionInfo => Arc::new(decode_json::<VersionInfo>(&data)?),
-                    SourceKind::AssetIndex => Arc::new(decode_json::<AssetIndex>(&data)?),
+                    SourceKind::VersionManifest => Yoke::try_attach_to_cart(data, |buf| {
+                        serde_json::from_slice::<VersionManifest>(buf)
+                            .map(ResolvedArtifact::new)
+                            .map_err(move |err| ResolveError::Io(err.into()))
+                    }),
+                    SourceKind::VersionInfo => Yoke::try_attach_to_cart(data, |buf| {
+                        serde_json::from_slice::<VersionInfo>(buf)
+                            .map(ResolvedArtifact::new)
+                            .map_err(move |err| ResolveError::Io(err.into()))
+                    }),
+                    SourceKind::AssetIndex => Yoke::try_attach_to_cart(data, |buf| {
+                        serde_json::from_slice::<AssetIndex>(buf)
+                            .map(ResolvedArtifact::new)
+                            .map_err(move |err| ResolveError::Io(err.into()))
+                    }),
                     SourceKind::ZippedNatives {
                         classifier,
                         exclude,
-                    } => Arc::new(ZippedNatives {
-                        archive: SharedZipArchive::new(data).map_err(io::Error::other)?,
-                        exclude: Arc::clone(exclude),
-                        classifier: Arc::clone(classifier),
+                    } => Yoke::try_attach_to_cart(data, |_| {
+                        Ok(ResolvedArtifact::new(ZippedNatives {
+                            archive: SharedZipArchive::new(bytes).map_err(io::Error::from)?,
+                            exclude: exclude.iter().copied().map(str::to_string).collect(),
+                            classifier: Arc::clone(classifier),
+                        }))
                     }),
-                    _ => Arc::new(JustFile { data }),
+                    _ => Ok(Yoke::attach_to_cart(data, |_| {
+                        ResolvedArtifact::new(JustFile)
+                    })),
                 }
             }
             Source::Archive { ref entry, .. } => {
                 let entry = entry.clone();
-                let buf = tokio::task::spawn_blocking(move || {
+                let buf: BytesMut = tokio::task::spawn_blocking(move || {
                     let name = entry.get().name;
                     let mut archive = ZipArchive::clone(entry.backing_cart());
                     let mut file = archive.by_name(name).map_err(io::Error::other)?;
@@ -103,12 +119,13 @@ impl Resolver<GlobalConfig> for SimpleResolver {
                 .await
                 .map_err(io::Error::other)
                 .flatten()?;
+                let data = Arc::from(buf.as_ref());
 
-                Arc::new(JustFile { data: buf.freeze() })
+                Ok(Yoke::attach_to_cart(data, |_| {
+                    ResolvedArtifact::new(JustFile)
+                }))
             }
-        };
-
-        Ok(ResolvedArtifact { input, artifact })
+        }
     }
 }
 
@@ -120,7 +137,7 @@ async fn main() {
         params: Default::default(),
     };
     let resolver = SimpleResolver {
-        limiter: Arc::new(Semaphore::new(10)),
+        limiter: Arc::new(Semaphore::new(1000)),
         dirs: Dirs {
             root: "./test_mc/".into(),
             assets: "./test_mc/assets".into(),
@@ -132,31 +149,44 @@ async fn main() {
 
     let root = Source::Remote {
         url: Arc::new(Url::parse(VERSION_INFO_URL).unwrap()),
-        name: Arc::from("1.7.10"),
+        name: Cow::Borrowed("1.7.10"),
         kind: SourceKind::VersionInfo,
         hash: None,
         size: None,
     };
-    save(&resolver, &global_config, root).await;
+    download(&resolver, global_config, root).await;
 }
 
-async fn save(resolver: &SimpleResolver, global_config: &GlobalConfig, root: Source) {
-    let mut tasks = FuturesUnordered::new();
-    tasks.push(resolver.resolve(root));
-
-    while let Some(result) = tasks.next().await {
+async fn download(resolver: &SimpleResolver, global_config: GlobalConfig, root: Source<'static>) {
+    let mut stack = vec![save(resolver, root).await];
+    while let Some(result) = stack.pop() {
         let Ok(resolved) = result else {
             continue;
         };
 
-        let local_path = resolver.dirs.locate(&resolved.input);
-        let data = resolved.artifact.calc_bytes().unwrap();
-        let _ = tokio::fs::create_dir_all(local_path.parent().unwrap()).await;
-        let _ = tokio::fs::write(&local_path, &data).await;
-        println!("saved: {}", local_path.display());
+        let mut sources = resolved
+            .get()
+            .artifact
+            .provides(global_config.clone())
+            .map(|x| save(resolver, x))
+            .collect::<FuturesUnordered<_>>();
 
-        for next in resolved.artifact.provides(global_config) {
-            tasks.push(resolver.resolve(next));
+        while let Some(next) = sources.next().await {
+            stack.push(next);
         }
     }
+}
+
+async fn save(
+    resolver: &SimpleResolver,
+    src: Source<'_>,
+) -> Result<Yoke<ResolvedArtifact<'static, GlobalConfig>, Arc<[u8]>>, ResolveError> {
+    let local_path = resolver.dirs.locate(&src);
+    let art_with_data = resolver.resolve(src).await?;
+    let bytes = art_with_data.backing_cart();
+    let _ = tokio::fs::create_dir_all(local_path.parent().unwrap()).await;
+    let _ = tokio::fs::write(&local_path, &bytes).await;
+    println!("saved: {}", local_path.display());
+
+    Ok(art_with_data)
 }

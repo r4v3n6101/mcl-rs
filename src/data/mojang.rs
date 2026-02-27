@@ -1,4 +1,4 @@
-use std::{collections::HashMap, iter, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, iter, sync::Arc};
 
 use bitflags::bitflags;
 use chrono::{DateTime, Utc};
@@ -8,22 +8,27 @@ use url::Url;
 
 pub use sha1_smol::Digest as Sha1Hash;
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct VersionManifest {
-    pub latest: Latest,
-    pub versions: Vec<Version>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionManifest<'a> {
+    #[serde(borrow)]
+    pub latest: Latest<'a>,
+    #[serde(borrow)]
+    pub versions: Vec<Version<'a>>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Latest {
-    pub release: Arc<str>,
-    pub snapshot: Arc<str>,
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub struct Latest<'a> {
+    #[serde(borrow)]
+    pub release: &'a str,
+    #[serde(borrow)]
+    pub snapshot: &'a str,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Version {
-    pub id: Arc<str>,
+pub struct Version<'a> {
+    #[serde(borrow)]
+    pub id: &'a str,
     #[serde(rename = "type")]
     pub version_kind: VersionKind,
     pub url: Arc<Url>,
@@ -31,7 +36,7 @@ pub struct Version {
     pub release_time: DateTime<Utc>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VersionKind {
     Release,
@@ -40,204 +45,226 @@ pub enum VersionKind {
     OldBeta,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct VersionInfo {
-    pub id: Arc<str>,
+pub struct VersionInfo<'a> {
+    #[serde(borrow)]
+    pub id: &'a str,
     #[serde(rename = "type")]
     pub version_kind: VersionKind,
-    pub asset_index: AssetIndexResource,
+    #[serde(borrow)]
+    pub asset_index: AssetIndexResource<'a>,
     pub downloads: Downloads,
-    pub libraries: Vec<Library>,
-    pub assets: String,
-    pub main_class: String,
-    #[serde(flatten)]
-    pub arguments: Arguments,
+    #[serde(borrow)]
+    pub libraries: Vec<Library<'a>>,
+    #[serde(borrow)]
+    pub assets: &'a str,
+    #[serde(borrow)]
+    pub main_class: &'a str,
+    #[serde(borrow, flatten)]
+    pub arguments: Arguments<'a>,
 
     pub minimum_launcher_version: u64,
     pub release_time: DateTime<Utc>,
     pub time: DateTime<Utc>,
-    pub java_version: Option<JavaVersion>,
-    pub logging: Option<Logging>,
+    #[serde(borrow)]
+    pub java_version: Option<JavaVersion<'a>>,
+    #[serde(borrow)]
+    pub logging: Option<Logging<'a>>,
     pub compliance_level: Option<u64>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AssetIndexResource {
+pub struct AssetIndexResource<'a> {
     #[serde(flatten)]
     pub resource: Resource,
-    pub id: Arc<str>,
+    #[serde(borrow)]
+    pub id: &'a str,
     pub total_size: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct AssetIndex {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetIndex<'a> {
     #[serde(default)]
     pub map_to_resources: bool,
-    pub objects: HashMap<Arc<str>, AssetMetadata>,
+    #[serde(borrow)]
+    pub objects: HashMap<&'a str, AssetMetadata>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct AssetMetadata {
     pub hash: Sha1Hash,
     pub size: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Downloads {
     pub client: Resource,
     pub server: Option<Resource>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Library {
-    #[serde(rename = "downloads")]
-    pub resources: LibraryResources,
-    pub name: Arc<str>,
-    #[serde(default)]
-    pub natives: HashMap<String, String>,
-    #[serde(default)]
-    pub extract: LibraryExtract,
-    #[serde(default)]
-    pub rules: Rules,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Library<'a> {
+    #[serde(borrow, rename = "downloads")]
+    pub resources: LibraryResources<'a>,
+    #[serde(borrow)]
+    pub name: &'a str,
+    #[serde(borrow, default)]
+    pub natives: HashMap<&'a str, &'a str>,
+    #[serde(borrow, default)]
+    pub extract: LibraryExtract<'a>,
+    #[serde(borrow, default)]
+    pub rules: Rules<'a>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct LibraryResources {
-    pub artifact: Option<LibraryResource>,
-    #[serde(default, rename = "classifiers")]
-    pub extra: HashMap<String, LibraryResource>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LibraryResources<'a> {
+    #[serde(borrow)]
+    pub artifact: Option<LibraryResource<'a>>,
+    #[serde(borrow, default, rename = "classifiers")]
+    pub extra: HashMap<&'a str, LibraryResource<'a>>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct LibraryResource {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LibraryResource<'a> {
     #[serde(flatten)]
     pub resource: Resource,
-    pub path: Option<Arc<str>>,
+    #[serde(borrow)]
+    pub path: Option<&'a str>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct LibraryExtract {
-    #[serde(default)]
-    pub exclude: Arc<[Arc<str>]>,
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct LibraryExtract<'a> {
+    #[serde(borrow, default)]
+    pub exclude: Vec<&'a str>,
 }
 
 #[serde_as]
-#[derive(Serialize, Deserialize, Debug)]
-pub enum Arguments {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Arguments<'a> {
     #[serde(rename = "arguments")]
     Modern {
-        #[serde(default)]
-        game: Vec<Argument>,
-        #[serde(default)]
-        jvm: Vec<Argument>,
+        #[serde(borrow, default)]
+        game: Vec<Argument<'a>>,
+        #[serde(borrow, default)]
+        jvm: Vec<Argument<'a>>,
     },
     #[serde(rename = "minecraftArguments")]
     Legacy(#[serde_as(as = "StringWithSeparator::<SpaceSeparator, String>")] Vec<String>),
 }
 
 #[serde_as]
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum Argument {
-    Plain(String),
+pub enum Argument<'a> {
+    Plain(#[serde(borrow)] &'a str),
     RuleSpecific {
         #[serde_as(deserialize_as = "OneOrMany<_>")]
-        value: Vec<String>,
-        #[serde(default)]
-        rules: Rules,
+        #[serde(borrow)]
+        value: Vec<&'a str>,
+        #[serde(borrow, default)]
+        rules: Rules<'a>,
     },
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct JavaVersion {
-    pub component: String,
+pub struct JavaVersion<'a> {
+    #[serde(borrow)]
+    pub component: &'a str,
     pub major_version: u32,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Logging {
-    pub client: LoggerDescription,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Logging<'a> {
+    #[serde(borrow)]
+    pub client: LoggerDescription<'a>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct LoggerDescription {
-    pub argument: String,
-    #[serde(rename = "type")]
-    pub log_type: String,
-    #[serde(rename = "file")]
-    pub config: LoggerConfig,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggerDescription<'a> {
+    #[serde(borrow)]
+    pub argument: &'a str,
+    #[serde(borrow, rename = "type")]
+    pub log_type: &'a str,
+    #[serde(borrow, rename = "file")]
+    pub config: LoggerConfig<'a>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct LoggerConfig {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggerConfig<'a> {
     #[serde(flatten)]
     pub resource: Resource,
-    pub id: String,
+    #[serde(borrow)]
+    pub id: &'a str,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct JvmManifest {
-    #[serde(flatten, default)]
-    pub platforms: HashMap<Arc<str>, JvmPlatform>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JvmManifest<'a> {
+    #[serde(borrow, flatten, default)]
+    pub platforms: HashMap<&'a str, JvmPlatform<'a>>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct JvmPlatform {
-    #[serde(flatten, default)]
-    pub resources: HashMap<Arc<str>, Vec<JvmResource>>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JvmPlatform<'a> {
+    #[serde(borrow, flatten, default)]
+    pub resources: HashMap<&'a str, Vec<JvmResource<'a>>>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct JvmResource {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JvmResource<'a> {
     pub availability: JvmAvailability,
     #[serde(rename = "manifest")]
     pub resource: Resource,
-    pub version: JvmVersion,
+    #[serde(borrow)]
+    pub version: JvmVersion<'a>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct JvmAvailability {
     pub group: u32,
     pub progress: u32,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct JvmVersion {
-    pub name: Arc<str>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JvmVersion<'a> {
+    #[serde(borrow)]
+    pub name: &'a str,
     pub released: DateTime<Utc>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct JvmInfo {
-    #[serde(rename = "files")]
-    pub content: HashMap<Arc<str>, JvmContent>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JvmInfo<'a> {
+    #[serde(borrow, rename = "files")]
+    pub content: HashMap<&'a str, JvmContent<'a>>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[serde(rename_all = "camelCase")]
-pub enum JvmContent {
+pub enum JvmContent<'a> {
     File(Box<JvmFile>),
-    Link { target: String },
+    Link {
+        #[serde(borrow)]
+        target: &'a str,
+    },
     Directory,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JvmFile {
     pub downloads: JvmFileDownloads,
     pub executable: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JvmFileDownloads {
     pub lzma: Option<Resource>,
     pub raw: Resource,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Resource {
     #[serde(rename = "sha1")]
     pub hash: Sha1Hash,
@@ -245,30 +272,33 @@ pub struct Resource {
     pub url: Arc<Url>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct Rules(Vec<Rule>);
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Rules<'a>(#[serde(borrow)] Vec<Rule<'a>>);
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Rule {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Rule<'a> {
     pub action: RuleAction,
-    #[serde(default)]
-    pub os: OsDescription,
-    #[serde(default)]
-    pub features: HashMap<String, bool>,
+    #[serde(borrow, default)]
+    pub os: OsDescription<'a>,
+    #[serde(borrow, default)]
+    pub features: HashMap<&'a str, bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RuleAction {
     Allow,
     Disallow,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct OsDescription {
-    pub name: Option<String>,
-    pub version: Option<String>,
-    pub arch: Option<String>,
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct OsDescription<'a> {
+    #[serde(borrow)]
+    pub name: Option<&'a str>,
+    #[serde(borrow)]
+    pub version: Option<&'a str>,
+    #[serde(borrow)]
+    pub arch: Option<&'a str>,
 }
 
 bitflags! {
@@ -287,8 +317,12 @@ bitflags! {
     }
 }
 
-impl Rules {
-    pub fn is_allowed(&self, params: &HashMap<&str, bool>, os_selector: OsSelector) -> bool {
+impl Rules<'_> {
+    pub fn is_allowed(
+        &self,
+        params: &HashMap<Cow<'static, str>, bool>,
+        os_selector: OsSelector,
+    ) -> bool {
         !self
             .0
             .iter()
@@ -296,17 +330,17 @@ impl Rules {
     }
 }
 
-impl Rule {
+impl Rule<'_> {
+    pub fn is_allowed(&self, params: &HashMap<Cow<'static, str>, bool>, os: OsSelector) -> bool {
+        self.calculate_action(params, os).value()
+    }
+
     fn calculate_action(
         &self,
-        params: &HashMap<&str, bool>,
+        params: &HashMap<Cow<'static, str>, bool>,
         os_selector: OsSelector,
     ) -> RuleAction {
-        let allowed = match (
-            self.os.name.as_deref(),
-            self.os.arch.as_deref(),
-            self.os.version.as_deref(),
-        ) {
+        let allowed = match (self.os.name, self.os.arch, self.os.version) {
             (Some("linux"), Some("x86"), _) => OsSelector::Linux32,
             (Some("linux"), _, _) => OsSelector::Linux64 | OsSelector::Linux32,
 
@@ -343,16 +377,12 @@ impl Rule {
         }
 
         for (k, v) in &self.features {
-            if params.get(k.as_str()).unwrap_or(&false) != v {
+            if params.get(&Cow::Borrowed(*k)).unwrap_or(&false) != v {
                 return self.action.invert();
             }
         }
 
         self.action
-    }
-
-    pub fn is_allowed(&self, params: &HashMap<&str, bool>, os: OsSelector) -> bool {
-        self.calculate_action(params, os).value()
     }
 }
 
@@ -372,10 +402,10 @@ impl RuleAction {
     }
 }
 
-impl Arguments {
-    pub fn iter_jvm_args<'a>(
+impl<'a> Arguments<'a> {
+    pub fn iter_jvm_args(
         &'a self,
-        params: &'a HashMap<&str, bool>,
+        params: &'a HashMap<Cow<'static, str>, bool>,
         os_selector: OsSelector,
     ) -> Box<dyn Iterator<Item = &'a str> + 'a> {
         match self {
@@ -387,9 +417,9 @@ impl Arguments {
         }
     }
 
-    pub fn iter_game_args<'a>(
+    pub fn iter_game_args(
         &'a self,
-        params: &'a HashMap<&str, bool>,
+        params: &'a HashMap<Cow<'static, str>, bool>,
         os_selector: OsSelector,
     ) -> Box<dyn Iterator<Item = &'a str> + 'a> {
         match self {
@@ -402,17 +432,17 @@ impl Arguments {
     }
 }
 
-impl Argument {
-    pub fn iter_strings<'a>(
+impl<'a> Argument<'a> {
+    pub fn iter_strings(
         &'a self,
-        features: &HashMap<&str, bool>,
+        features: &HashMap<Cow<'static, str>, bool>,
         os_selector: OsSelector,
     ) -> Box<dyn Iterator<Item = &'a str> + 'a> {
         match self {
-            Self::Plain(s) => Box::new(iter::once(s.as_str())),
+            Self::Plain(s) => Box::new(iter::once(*s)),
             Self::RuleSpecific { value, rules } => {
                 if rules.is_allowed(features, os_selector) {
-                    Box::new(value.iter().map(String::as_str))
+                    Box::new(value.iter().copied())
                 } else {
                     Box::new(iter::empty())
                 }

@@ -42,7 +42,7 @@ impl Dirs {
                     jvm_mojang_name,
                 } => build_path(
                     self.runtime.clone(),
-                    [jvm_mojang_name, platform, jvm_mojang_name, name],
+                    [jvm_mojang_name, platform, jvm_mojang_name, &**name],
                     "_info",
                     "json",
                 ),
@@ -52,7 +52,7 @@ impl Dirs {
                     ..
                 } => build_path(
                     self.runtime.clone(),
-                    [jvm_mojang_name, platform, jvm_mojang_name, name],
+                    [jvm_mojang_name, platform, jvm_mojang_name, &**name],
                     None,
                     None,
                 ),

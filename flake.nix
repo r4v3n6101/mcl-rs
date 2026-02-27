@@ -20,7 +20,7 @@
       let
         overlays = [ rust-overlay.overlays.default ];
         pkgs = import nixpkgs { inherit system overlays; };
-        rustVersion = pkgs.rust-bin.stable.latest.default;
+        rustVersion = pkgs.rust-bin.nightly.latest.default;
       in
       {
         formatter = pkgs.nixpkgs-fmt;

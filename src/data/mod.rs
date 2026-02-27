@@ -1,12 +1,12 @@
-use std::{io, sync::Arc};
+use std::{borrow::Cow, sync::Arc};
 
-use bytes::Bytes;
 use url::Url;
-use yoke::Yoke;
+use yoke::{Yoke, Yokeable};
 
-use crate::data::other::{SharedZipArchive, ZipEntry};
-
-use self::mojang::Sha1Hash;
+use self::{
+    mojang::Sha1Hash,
+    other::{SharedZipArchive, ZipEntry},
+};
 
 pub mod config;
 pub mod mojang;
@@ -14,34 +14,19 @@ pub mod other;
 
 mod imp;
 
-/// Something meaningful and physically existing like a JSON with data
-/// or file, or even an archive with files.
-pub trait Artifact: GetBytes + 'static {
-    /// It's a reference semantically.
-    type Config<'this>
-    where
-        Self: 'this;
+/// Something meaningful and physically existing like a JSON with data or file, or even an archive with files.
+pub trait Artifact {
+    type Config;
 
-    /// Artifacts provided by [`Self`] in form of [`Source`],
-    /// so they aren't resolved to concrete type.
-    fn provides<'this>(
-        &'this self,
-        config: Self::Config<'this>,
-    ) -> impl Iterator<Item = Source> + 'this;
+    fn provides(&self, config: Self::Config) -> impl Iterator<Item = Source<'_>> + '_;
 }
 
-///  Those can be serialized into bytes.
-pub trait GetBytes {
-    /// Get or calculate bytes for the object.
-    fn calc_bytes(&self) -> io::Result<Bytes>;
-}
-
-#[derive(Debug)]
-pub enum Source {
+#[derive(Yokeable, Debug)]
+pub enum Source<'src> {
     Remote {
         url: Arc<Url>,
-        name: Arc<str>,
-        kind: SourceKind,
+        name: Cow<'src, str>,
+        kind: SourceKind<'src>,
         hash: Option<Sha1Hash>,
         size: Option<u64>,
     },
@@ -55,7 +40,7 @@ pub enum Source {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
-pub enum SourceKind {
+pub enum SourceKind<'src> {
     VersionManifest,
     VersionInfo,
     ClientJar,
@@ -63,15 +48,15 @@ pub enum SourceKind {
     Library,
     ZippedNatives {
         classifier: Arc<str>,
-        exclude: Arc<[Arc<str>]>,
+        exclude: &'src [&'src str],
     },
     AssetIndex,
     Asset {
         legacy: bool,
     },
     JvmInfo {
-        platform: Arc<str>,
-        jvm_mojang_name: Arc<str>,
+        platform: &'src str,
+        jvm_mojang_name: &'src str,
     },
     JvmFile {
         platform: Arc<str>,

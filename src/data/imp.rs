@@ -1,60 +1,39 @@
-use std::{array, borrow::Cow, io, iter, sync::Arc};
+use std::{array, borrow::Cow, iter, sync::Arc};
 
-use bytes::Bytes;
-use serde::Serialize;
+use better_any::tid;
 use yoke::Yoke;
 
 use crate::util;
 
 use super::{
-    ArchiveKind, Artifact, GetBytes, Source, SourceKind,
+    ArchiveKind, Artifact, Source, SourceKind,
     config::{AssetIndexConfig, JvmInfoConfig, VersionInfoConfig},
     mojang::{
         AssetIndex, AssetMetadata, JvmContent, JvmInfo, JvmManifest, JvmPlatform, JvmResource,
-        Library, LibraryResource, OsSelector, Resource, VersionInfo, VersionManifest,
+        LibraryResource, OsSelector, Resource, VersionInfo, VersionManifest,
     },
     other::{JustFile, ZipEntry, ZippedNatives},
 };
 
-impl<T> GetBytes for T
-where
-    T: Serialize,
-{
-    fn calc_bytes(&self) -> io::Result<Bytes> {
-        Ok(Bytes::from(serde_json::to_vec_pretty(self)?))
-    }
-}
-
-impl GetBytes for JustFile {
-    fn calc_bytes(&self) -> io::Result<Bytes> {
-        Ok(self.data.clone())
-    }
-}
-
-impl GetBytes for ZippedNatives {
-    fn calc_bytes(&self) -> io::Result<Bytes> {
-        Ok(self.archive.get_data())
-    }
-}
+// For dyn Tid<'a> casts (i.e. dyn Any with LT bounded)
+tid!(VersionManifest<'a>);
+tid!(VersionInfo<'a>);
+tid!(AssetIndex<'a>);
+tid!(JustFile);
+tid!(ZippedNatives);
 
 impl Artifact for JustFile {
-    type Config<'this> = ();
+    type Config = ();
 
-    fn provides<'this>(
-        &'this self,
-        (): Self::Config<'this>,
-    ) -> impl Iterator<Item = Source> + 'this {
+    fn provides(&self, (): Self::Config) -> impl Iterator<Item = Source<'_>> + '_ {
         iter::empty()
     }
 }
 
 impl Artifact for ZippedNatives {
-    type Config<'this> = ();
+    type Config = ();
 
-    fn provides<'this>(
-        &'this self,
-        (): Self::Config<'this>,
-    ) -> impl Iterator<Item = Source> + 'this {
+    fn provides(&self, (): Self::Config) -> impl Iterator<Item = Source<'_>> + '_ {
         (0..self.archive.len()).filter_map(|i| {
             // NB: I want try_ returns T: Try
             let entry =
@@ -83,17 +62,13 @@ impl Artifact for ZippedNatives {
     }
 }
 
-impl Artifact for VersionManifest {
-    // TODO : selector for versions
-    type Config<'this> = ();
+impl Artifact for VersionManifest<'_> {
+    type Config = ();
 
-    fn provides<'this>(
-        &'this self,
-        (): Self::Config<'this>,
-    ) -> impl Iterator<Item = Source> + 'this {
+    fn provides(&self, (): Self::Config) -> impl Iterator<Item = Source<'_>> + '_ {
         self.versions.iter().map(|version| Source::Remote {
             url: Arc::clone(&version.url),
-            name: Arc::clone(&version.id),
+            name: Cow::Borrowed(version.id),
             kind: SourceKind::VersionInfo,
             hash: None,
             size: None,
@@ -101,13 +76,10 @@ impl Artifact for VersionManifest {
     }
 }
 
-impl Artifact for AssetIndex {
-    type Config<'this> = AssetIndexConfig<'this>;
+impl Artifact for AssetIndex<'_> {
+    type Config = AssetIndexConfig;
 
-    fn provides<'this>(
-        &'this self,
-        config: Self::Config<'this>,
-    ) -> impl Iterator<Item = Source> + 'this {
+    fn provides(&self, config: Self::Config) -> impl Iterator<Item = Source<'_>> + '_ {
         self.objects
             .iter()
             .map(move |(path, AssetMetadata { hash, size })| {
@@ -126,9 +98,9 @@ impl Artifact for AssetIndex {
                             .expect("couldn't create url with hash"),
                     ),
                     name: if self.map_to_resources {
-                        Arc::clone(path)
+                        Cow::Borrowed(path)
                     } else {
-                        Arc::from(hash_path)
+                        Cow::Owned(hash_path)
                     },
                     hash: Some(*hash),
                     size: Some(*size),
@@ -137,17 +109,14 @@ impl Artifact for AssetIndex {
     }
 }
 
-impl Artifact for VersionInfo {
-    type Config<'this> = VersionInfoConfig<'this>;
+impl Artifact for VersionInfo<'_> {
+    type Config = VersionInfoConfig;
 
-    fn provides<'this>(
-        &'this self,
-        config: Self::Config<'this>,
-    ) -> impl Iterator<Item = Source> + 'this {
+    fn provides(&self, config: Self::Config) -> impl Iterator<Item = Source<'_>> + '_ {
         let asset_index = iter::once(Source::Remote {
             kind: SourceKind::AssetIndex,
             url: Arc::clone(&self.asset_index.resource.url),
-            name: Arc::clone(&self.asset_index.id),
+            name: Cow::Borrowed(self.asset_index.id),
             hash: Some(self.asset_index.resource.hash),
             size: Some(self.asset_index.resource.size),
         });
@@ -155,7 +124,7 @@ impl Artifact for VersionInfo {
         let client_jar = iter::once(Source::Remote {
             kind: SourceKind::ClientJar,
             url: Arc::clone(&self.downloads.client.url),
-            name: Arc::clone(&self.id),
+            name: Cow::Borrowed(self.id),
             hash: Some(self.downloads.client.hash),
             size: Some(self.downloads.client.size),
         });
@@ -167,7 +136,7 @@ impl Artifact for VersionInfo {
             .map(|Resource { hash, size, url }| Source::Remote {
                 kind: SourceKind::ServerJar,
                 url: Arc::clone(url),
-                name: Arc::clone(&self.id),
+                name: Cow::Borrowed(self.id),
                 hash: Some(*hash),
                 size: Some(*size),
             });
@@ -175,7 +144,7 @@ impl Artifact for VersionInfo {
         let libraries = self
             .libraries
             .iter()
-            .filter(move |lib| lib.rules.is_allowed(config.params, config.os_selector))
+            .filter(move |lib| lib.rules.is_allowed(&config.params, config.os_selector))
             .flat_map(move |lib| {
                 let library = lib.resources.artifact.as_ref().map(
                     |LibraryResource {
@@ -185,9 +154,9 @@ impl Artifact for VersionInfo {
                         Source::Remote {
                             kind: SourceKind::Library,
                             url: Arc::clone(url),
-                            name: path.as_ref().map_or_else(
-                                || Arc::from(util::build_library_path(&lib.name, hash, None)),
-                                Arc::clone,
+                            name: path.map_or_else(
+                                || Cow::Owned(util::build_library_path(lib.name, &hash, None)),
+                                Cow::Borrowed,
                             ),
                             hash: Some(*hash),
                             size: Some(*size),
@@ -215,35 +184,36 @@ impl Artifact for VersionInfo {
                 ];
                 for (i, (flag, os_name, arch)) in variants.iter().enumerate() {
                     if config.os_selector.intersects(*flag) {
-                        natives[i] = calc_native_str(lib, os_name, arch).map(
-                            |(
-                                classifier,
-                                LibraryResource {
-                                    resource: Resource { hash, size, url },
-                                    path,
-                                },
-                            )| {
-                                Source::Remote {
-                                    kind: SourceKind::ZippedNatives {
-                                        classifier: Arc::clone(&self.id),
-                                        exclude: Arc::clone(&lib.extract.exclude),
-                                    },
-                                    url: Arc::clone(url),
-                                    name: path.as_ref().map_or_else(
-                                        || {
-                                            Arc::from(util::build_library_path(
-                                                &lib.name,
-                                                hash,
-                                                Some(&classifier),
-                                            ))
+                        natives[i] = lib.natives.get(os_name).and_then(|classifier| {
+                            let params = iter::once(("arch", *arch)).collect();
+                            let full_classifier = util::substitute_params(classifier, &params);
+                            lib.resources.extra.get(&*full_classifier).map(
+                                |LibraryResource {
+                                     resource: Resource { hash, size, url },
+                                     path,
+                                 }| {
+                                    Source::Remote {
+                                        kind: SourceKind::ZippedNatives {
+                                            classifier: Arc::from(self.id),
+                                            exclude: &lib.extract.exclude,
                                         },
-                                        Arc::clone,
-                                    ),
-                                    hash: Some(*hash),
-                                    size: Some(*size),
-                                }
-                            },
-                        );
+                                        url: Arc::clone(url),
+                                        name: path.map_or_else(
+                                            || {
+                                                Cow::Owned(util::build_library_path(
+                                                    lib.name,
+                                                    hash,
+                                                    Some(classifier),
+                                                ))
+                                            },
+                                            Cow::Borrowed,
+                                        ),
+                                        hash: Some(*hash),
+                                        size: Some(*size),
+                                    }
+                                },
+                            )
+                        });
                     }
                 }
 
@@ -257,13 +227,10 @@ impl Artifact for VersionInfo {
     }
 }
 
-impl Artifact for JvmManifest {
-    type Config<'this> = ();
+impl Artifact for JvmManifest<'_> {
+    type Config = ();
 
-    fn provides<'this>(
-        &'this self,
-        (): Self::Config<'this>,
-    ) -> impl Iterator<Item = Source> + 'this {
+    fn provides(&self, (): Self::Config) -> impl Iterator<Item = Source<'_>> + '_ {
         self.platforms
             .iter()
             .flat_map(|(platform, JvmPlatform { resources })| {
@@ -276,11 +243,11 @@ impl Artifact for JvmManifest {
                          }| {
                             Source::Remote {
                                 kind: SourceKind::JvmInfo {
-                                    platform: Arc::clone(platform),
-                                    jvm_mojang_name: Arc::clone(jvm_mojang_name),
+                                    platform,
+                                    jvm_mojang_name,
                                 },
                                 url: Arc::clone(url),
-                                name: Arc::clone(&version.name),
+                                name: Cow::Borrowed(version.name),
                                 hash: Some(*hash),
                                 size: Some(*size),
                             }
@@ -291,13 +258,10 @@ impl Artifact for JvmManifest {
     }
 }
 
-impl Artifact for JvmInfo {
-    type Config<'this> = JvmInfoConfig;
+impl Artifact for JvmInfo<'_> {
+    type Config = JvmInfoConfig;
 
-    fn provides<'this>(
-        &'this self,
-        config: Self::Config<'this>,
-    ) -> impl Iterator<Item = Source> + 'this {
+    fn provides(&self, config: Self::Config) -> impl Iterator<Item = Source<'_>> + '_ {
         self.content
             .iter()
             .filter_map(move |(path, file)| match file {
@@ -317,7 +281,7 @@ impl Artifact for JvmInfo {
                             compressed,
                         },
                         url: Arc::clone(url),
-                        name: Arc::clone(path),
+                        name: Cow::Borrowed(path),
                         hash: Some(*hash),
                         size: Some(*size),
                     })
@@ -325,19 +289,4 @@ impl Artifact for JvmInfo {
                 _ => None,
             })
     }
-}
-
-fn calc_native_str<'a>(
-    lib: &'a Library,
-    os_name: &str,
-    bitness: &str,
-) -> Option<(Cow<'a, str>, &'a LibraryResource)> {
-    lib.natives.get(os_name).and_then(|classifier| {
-        let params = iter::once(("arch", bitness)).collect();
-        let full_classifier = util::substitute_params(classifier, &params);
-        lib.resources
-            .extra
-            .get(full_classifier.as_ref())
-            .map(|res| (full_classifier, res))
-    })
 }
