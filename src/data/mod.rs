@@ -1,7 +1,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use url::Url;
-use yoke::{Yoke, Yokeable};
+use yoke::{Yoke, Yokeable, erased::ErasedArcCart};
 
 use self::{
     mojang::Sha1Hash,
@@ -16,12 +16,15 @@ mod imp;
 
 /// Something meaningful and physically existing like a JSON with data or file, or even an archive with files.
 pub trait Artifact {
-    type Config;
+    type Config: for<'a> Yokeable<'a>;
 
-    fn provides(&self, config: Self::Config) -> impl Iterator<Item = Source<'_>> + '_;
+    fn provides(
+        &self,
+        config: Yoke<Self::Config, ErasedArcCart>,
+    ) -> impl Iterator<Item = Source<'_>> + '_;
 }
 
-#[derive(Yokeable, Debug)]
+#[derive(Yokeable)]
 pub enum Source<'src> {
     Remote {
         url: Arc<Url>,
@@ -38,7 +41,6 @@ pub enum Source<'src> {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum SourceKind<'src> {
     VersionManifest,
@@ -59,14 +61,13 @@ pub enum SourceKind<'src> {
         jvm_mojang_name: &'src str,
     },
     JvmFile {
-        platform: Arc<str>,
-        jvm_mojang_name: Arc<str>,
+        platform: Yoke<&'static str, ErasedArcCart>,
+        jvm_mojang_name: Yoke<&'static str, ErasedArcCart>,
         executable: bool,
         compressed: bool,
     },
 }
 
-#[derive(Debug, Clone)]
 pub enum ArchiveKind {
     Natives {
         /// Classifier for unpacking natives into dir.

@@ -52,7 +52,12 @@ impl Dirs {
                     ..
                 } => build_path(
                     self.runtime.clone(),
-                    [jvm_mojang_name, platform, jvm_mojang_name, &**name],
+                    [
+                        jvm_mojang_name.get(),
+                        platform.get(),
+                        jvm_mojang_name.get(),
+                        &**name,
+                    ],
                     None,
                     None,
                 ),

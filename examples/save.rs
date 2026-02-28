@@ -31,29 +31,28 @@ struct SimpleResolver {
     dirs: Dirs,
 }
 
-#[derive(Clone)]
 struct GlobalConfig {
     resources: Url,
     params: HashMap<Cow<'static, str>, bool>,
     os_selector: OsSelector,
 }
 
-impl From<GlobalConfig> for () {
-    fn from(_: GlobalConfig) -> Self {}
+impl From<&GlobalConfig> for () {
+    fn from(_: &GlobalConfig) -> Self {}
 }
 
-impl From<GlobalConfig> for AssetIndexConfig {
-    fn from(value: GlobalConfig) -> Self {
+impl<'a> From<&'a GlobalConfig> for AssetIndexConfig<'a> {
+    fn from(value: &'a GlobalConfig) -> Self {
         Self {
-            origin: value.resources.clone(),
+            origin: &value.resources,
         }
     }
 }
 
-impl From<GlobalConfig> for VersionInfoConfig {
-    fn from(value: GlobalConfig) -> Self {
+impl<'a> From<&'a GlobalConfig> for VersionInfoConfig<'a> {
+    fn from(value: &'a GlobalConfig) -> Self {
         Self {
-            params: value.params.clone(),
+            params: &value.params,
             os_selector: value.os_selector,
         }
     }
@@ -131,11 +130,11 @@ impl Resolver<GlobalConfig> for SimpleResolver {
 
 #[tokio::main]
 async fn main() {
-    let global_config = GlobalConfig {
+    let global_config = Arc::new(GlobalConfig {
         resources: Url::parse(RESOURCES_URL).unwrap(),
         os_selector: OsSelector::all(),
         params: Default::default(),
-    };
+    });
     let resolver = SimpleResolver {
         limiter: Arc::new(Semaphore::new(1000)),
         dirs: Dirs {
@@ -157,7 +156,11 @@ async fn main() {
     download(&resolver, global_config, root).await;
 }
 
-async fn download(resolver: &SimpleResolver, global_config: GlobalConfig, root: Source<'static>) {
+async fn download(
+    resolver: &SimpleResolver,
+    global_config: Arc<GlobalConfig>,
+    root: Source<'static>,
+) {
     let mut stack = vec![save(resolver, root).await];
     while let Some(result) = stack.pop() {
         let Ok(resolved) = result else {

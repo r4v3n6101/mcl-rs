@@ -1,7 +1,7 @@
-use std::{array, borrow::Cow, iter, sync::Arc};
+use std::{array, borrow::Cow, collections::HashMap, iter, sync::Arc};
 
 use better_any::tid;
-use yoke::Yoke;
+use yoke::{Yoke, erased::ErasedArcCart};
 
 use crate::util;
 
@@ -25,7 +25,10 @@ tid!(ZippedNatives);
 impl Artifact for JustFile {
     type Config = ();
 
-    fn provides(&self, (): Self::Config) -> impl Iterator<Item = Source<'_>> + '_ {
+    fn provides(
+        &self,
+        _: Yoke<Self::Config, ErasedArcCart>,
+    ) -> impl Iterator<Item = Source<'_>> + '_ {
         iter::empty()
     }
 }
@@ -33,7 +36,10 @@ impl Artifact for JustFile {
 impl Artifact for ZippedNatives {
     type Config = ();
 
-    fn provides(&self, (): Self::Config) -> impl Iterator<Item = Source<'_>> + '_ {
+    fn provides(
+        &self,
+        _: Yoke<Self::Config, ErasedArcCart>,
+    ) -> impl Iterator<Item = Source<'_>> + '_ {
         (0..self.archive.len()).filter_map(|i| {
             // NB: I want try_ returns T: Try
             let entry =
@@ -65,7 +71,10 @@ impl Artifact for ZippedNatives {
 impl Artifact for VersionManifest<'_> {
     type Config = ();
 
-    fn provides(&self, (): Self::Config) -> impl Iterator<Item = Source<'_>> + '_ {
+    fn provides(
+        &self,
+        _: Yoke<Self::Config, ErasedArcCart>,
+    ) -> impl Iterator<Item = Source<'_>> + '_ {
         self.versions.iter().map(|version| Source::Remote {
             url: Arc::clone(&version.url),
             name: Cow::Borrowed(version.id),
@@ -77,9 +86,12 @@ impl Artifact for VersionManifest<'_> {
 }
 
 impl Artifact for AssetIndex<'_> {
-    type Config = AssetIndexConfig;
+    type Config = AssetIndexConfig<'static>;
 
-    fn provides(&self, config: Self::Config) -> impl Iterator<Item = Source<'_>> + '_ {
+    fn provides(
+        &self,
+        config: Yoke<Self::Config, ErasedArcCart>,
+    ) -> impl Iterator<Item = Source<'_>> + '_ {
         self.objects
             .iter()
             .map(move |(path, AssetMetadata { hash, size })| {
@@ -93,6 +105,7 @@ impl Artifact for AssetIndex<'_> {
                     },
                     url: Arc::new(
                         config
+                            .get()
                             .origin
                             .join(&hash_path)
                             .expect("couldn't create url with hash"),
@@ -110,9 +123,12 @@ impl Artifact for AssetIndex<'_> {
 }
 
 impl Artifact for VersionInfo<'_> {
-    type Config = VersionInfoConfig;
+    type Config = VersionInfoConfig<'static>;
 
-    fn provides(&self, config: Self::Config) -> impl Iterator<Item = Source<'_>> + '_ {
+    fn provides(
+        &self,
+        config: Yoke<Self::Config, ErasedArcCart>,
+    ) -> impl Iterator<Item = Source<'_>> + '_ {
         let asset_index = iter::once(Source::Remote {
             kind: SourceKind::AssetIndex,
             url: Arc::clone(&self.asset_index.resource.url),
@@ -141,10 +157,12 @@ impl Artifact for VersionInfo<'_> {
                 size: Some(*size),
             });
 
+        let os_selector = config.get().os_selector;
+        let params: Yoke<&'static HashMap<_, _>, _> = config.map_project(|cfg, _| cfg.params);
         let libraries = self
             .libraries
             .iter()
-            .filter(move |lib| lib.rules.is_allowed(&config.params, config.os_selector))
+            .filter(move |lib| lib.rules.is_allowed(params.get(), os_selector))
             .flat_map(move |lib| {
                 let library = lib.resources.artifact.as_ref().map(
                     |LibraryResource {
@@ -183,7 +201,7 @@ impl Artifact for VersionInfo<'_> {
                     ),
                 ];
                 for (i, (flag, os_name, arch)) in variants.iter().enumerate() {
-                    if config.os_selector.intersects(*flag) {
+                    if os_selector.intersects(*flag) {
                         natives[i] = lib.natives.get(os_name).and_then(|classifier| {
                             let params = iter::once(("arch", *arch)).collect();
                             let full_classifier = util::substitute_params(classifier, &params);
@@ -230,7 +248,10 @@ impl Artifact for VersionInfo<'_> {
 impl Artifact for JvmManifest<'_> {
     type Config = ();
 
-    fn provides(&self, (): Self::Config) -> impl Iterator<Item = Source<'_>> + '_ {
+    fn provides(
+        &self,
+        _: Yoke<Self::Config, ErasedArcCart>,
+    ) -> impl Iterator<Item = Source<'_>> + '_ {
         self.platforms
             .iter()
             .flat_map(|(platform, JvmPlatform { resources })| {
@@ -259,9 +280,16 @@ impl Artifact for JvmManifest<'_> {
 }
 
 impl Artifact for JvmInfo<'_> {
-    type Config = JvmInfoConfig;
+    type Config = JvmInfoConfig<'static>;
 
-    fn provides(&self, config: Self::Config) -> impl Iterator<Item = Source<'_>> + '_ {
+    fn provides(
+        &self,
+        config: Yoke<Self::Config, ErasedArcCart>,
+    ) -> impl Iterator<Item = Source<'_>> + '_ {
+        let prefer_compressed = config.get().prefer_compressed;
+        let jvm_mojang_name: Yoke<&'static str, _> =
+            config.map_project_cloned(|cfg, _| cfg.jvm_mojang_name);
+        let platform: Yoke<&'static str, _> = config.map_project(|cfg, _| cfg.platform);
         self.content
             .iter()
             .filter_map(move |(path, file)| match file {
@@ -270,13 +298,13 @@ impl Artifact for JvmInfo<'_> {
                         .downloads
                         .lzma
                         .as_ref()
-                        .filter(|_| config.prefer_compressed)
+                        .filter(|_| prefer_compressed)
                         .map_or((&file.downloads.raw, false), |res| (res, true));
 
                     Some(Source::Remote {
                         kind: SourceKind::JvmFile {
-                            jvm_mojang_name: Arc::clone(&config.jvm_mojang_name),
-                            platform: Arc::clone(&config.platform),
+                            jvm_mojang_name: jvm_mojang_name.clone(),
+                            platform: platform.clone(),
                             executable: file.executable,
                             compressed,
                         },

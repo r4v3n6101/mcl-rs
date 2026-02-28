@@ -25,11 +25,14 @@ pub struct ResolvedArtifact<'a, G> {
     pub artifact: Arc<dyn ErasedArtifact<G> + 'a>,
 }
 
-impl<'a, G: 'static> ResolvedArtifact<'a, G> {
+impl<'a, G> ResolvedArtifact<'a, G>
+where
+    G: Send + Sync + 'static,
+{
     pub fn new<A>(artifact: A) -> Self
     where
         A: Artifact + Tid<'a> + 'a,
-        <A as Artifact>::Config: From<G>,
+        for<'b> <<A as Artifact>::Config as Yokeable<'b>>::Output: From<&'b G>,
     {
         let data = Arc::new(artifact);
         Self {
@@ -40,16 +43,20 @@ impl<'a, G: 'static> ResolvedArtifact<'a, G> {
 }
 
 pub trait ErasedArtifact<G> {
-    fn provides(&self, config: G) -> Box<dyn Iterator<Item = Source<'_>> + '_>;
+    fn provides(&self, config: Arc<G>) -> Box<dyn Iterator<Item = Source<'_>> + '_>;
 }
 
 impl<G, T> ErasedArtifact<G> for T
 where
     T: Artifact,
-    <T as Artifact>::Config: From<G>,
+    G: Send + Sync + 'static,
+    for<'b> <<T as Artifact>::Config as Yokeable<'b>>::Output: From<&'b G>,
 {
-    fn provides(&self, config: G) -> Box<dyn Iterator<Item = Source<'_>> + '_> {
-        Box::new(Artifact::provides(self, config.into()))
+    fn provides(&self, config: Arc<G>) -> Box<dyn Iterator<Item = Source<'_>> + '_> {
+        Box::new(Artifact::provides(
+            self,
+            Yoke::attach_to_cart(config, |cfg| cfg.into()).erase_arc_cart(),
+        ))
     }
 }
 
